@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: chinesely-tts
+    runtime: docker
+    plan: free
+    envVars:
+      - key: APP_PASSWORD
+        sync: false
+      - key: DASHSCOPE_API_KEY
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true

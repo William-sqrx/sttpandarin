@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Chinesely TTS</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Chinesely TTS</div>
+    <form method="post" action="/logout"><button class="link">Log out</button></form>
+  </header>
+
+  <main class="container">
+    <nav class="tabs">
+      <button class="tab active" data-tab="words">Words → MP3 folder</button>
+      <button class="tab" data-tab="exam">HSK Exam Excel → audio pack</button>
+    </nav>
+
+    <!-- ================= WORDS TAB ================= -->
+    <section class="panel" id="panel-words">
+      <h2>Word list → folder of MP3s</h2>
+      <p class="muted">
+        Upload a <code>.txt</code> file with one word/phrase per line.
+        Each becomes a separate <code>.mp3</code>. Download is a ZIP.
+      </p>
+
+      <form id="form-words" class="form">
+        <label>Word file (.txt)
+          <input type="file" name="file" accept=".txt,text/plain" required>
+        </label>
+
+        <div class="grid">
+          <label>Voice
+            <select name="voice" id="w-voice"></select>
+          </label>
+          <label>Model
+            <input name="model" value="qwen-tts">
+          </label>
+          <label>Speed <span class="muted">(0.5–2.0)</span>
+            <input name="speed" type="number" step="0.05" min="0.5" max="2.0" value="1.0">
+          </label>
+          <label>Tail padding (s)
+            <input name="tail_pad" type="number" step="0.05" min="0" value="0.3">
+          </label>
+          <label>Throttle between calls (s)
+            <input name="throttle_seconds" type="number" step="0.1" min="0" value="1.0">
+          </label>
+          <label>DashScope API key <span class="muted" id="w-key-hint"></span>
+            <input name="api_key" type="password" autocomplete="off" placeholder="leave blank to use server default">
+          </label>
+        </div>
+
+        <button type="submit">Generate</button>
+      </form>
+
+      <div class="progress" id="progress-words" hidden>
+        <div class="bar"><div class="fill" id="bar-words"></div></div>
+        <p id="status-words" class="muted"></p>
+        <a id="dl-words" class="button" hidden>Download ZIP</a>
+      </div>
+    </section>
+
+    <!-- ================= EXAM TAB ================= -->
+    <section class="panel" id="panel-exam" hidden>
+      <h2>HSK Exam Excel → audio pack</h2>
+      <p class="muted">
+        Upload the Excel file with a <b>Questions</b> tab (5 papers × 20 rows) and
+        optional <b>Exam Instructions</b> tab. Follows the official HSK listening structure:
+        Part 1 &amp; 2 = statement/question read twice (female then male). Part 3 =
+        female Q + male A (played 2×). Part 4 = male statement + female question.
+      </p>
+
+      <form id="form-exam" class="form">
+        <label>Excel file (.xlsx)
+          <input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+        </label>
+
+        <div class="grid">
+          <label>Female voice
+            <select name="female_voice" id="e-female"></select>
+          </label>
+          <label>Male voice
+            <select name="male_voice" id="e-male"></select>
+          </label>
+          <label>Model
+            <input name="model" value="qwen-tts">
+          </label>
+          <label>Speed <span class="muted">(0.5–2.0)</span>
+            <input name="speed" type="number" step="0.05" min="0.5" max="2.0" value="0.9">
+          </label>
+          <label>Gap between speakers (s)
+            <input name="gap_between_speakers" type="number" step="0.1" min="0" value="0.6">
+          </label>
+          <label>Gap between repeats (s)
+            <input name="gap_between_repeats" type="number" step="0.1" min="0" value="1.0">
+          </label>
+          <label>Tail padding (s)
+            <input name="tail_pad" type="number" step="0.05" min="0" value="0.3">
+          </label>
+          <label>Throttle between calls (s)
+            <input name="throttle_seconds" type="number" step="0.1" min="0" value="1.0">
+          </label>
+
+          <label>Part 1&amp;2 total reads
+            <input name="part12_repeat" type="number" step="1" min="1" value="2">
+          </label>
+          <label>Part 3 repeats
+            <input name="part3_repeat" type="number" step="1" min="1" value="2">
+          </label>
+          <label>Part 4 repeats
+            <input name="part4_repeat" type="number" step="1" min="1" value="1">
+          </label>
+          <label>Generate Exam Instructions too
+            <select name="include_instructions">
+              <option value="true" selected>Yes</option>
+              <option value="false">No</option>
+            </select>
+          </label>
+
+          <label class="full">DashScope API key <span class="muted" id="e-key-hint"></span>
+            <input name="api_key" type="password" autocomplete="off" placeholder="leave blank to use server default">
+          </label>
+        </div>
+
+        <button type="submit">Generate exam audio pack</button>
+      </form>
+
+      <div class="progress" id="progress-exam" hidden>
+        <div class="bar"><div class="fill" id="bar-exam"></div></div>
+        <p id="status-exam" class="muted"></p>
+        <a id="dl-exam" class="button" hidden>Download ZIP</a>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>

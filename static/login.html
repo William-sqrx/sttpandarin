@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Chinesely TTS — Login</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="center">
+  <form method="post" action="/login" class="card narrow">
+    <h1>Chinesely TTS</h1>
+    <p class="muted">Enter the password to continue.</p>
+    <label>Password
+      <input type="password" name="password" required autofocus>
+    </label>
+    <button type="submit">Sign in</button>
+    <p id="err" class="err" hidden>Incorrect password.</p>
+  </form>
+  <script>
+    if (new URLSearchParams(location.search).get("error") === "1") {
+      document.getElementById("err").hidden = false;
+    }
+  </script>
+</body>
+</html>
