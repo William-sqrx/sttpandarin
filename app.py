@@ -266,7 +266,7 @@ async def start_exam_job(
     request: Request,
     file: UploadFile = File(...),
     female_voice: str = Form("Serena"),
-    male_voice: str = Form("Cherry"),
+    male_voice: str = Form("Ethan"),
     model: str = Form(MODEL_DEFAULT),
     speed: float = Form(0.9),
     tail_pad: float = Form(0.3),

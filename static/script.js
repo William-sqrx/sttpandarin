@@ -21,7 +21,7 @@
   };
   fill("w-voice", [...defaults.female_voices, ...defaults.male_voices], "Serena");
   fill("e-female", defaults.female_voices, "Serena");
-  fill("e-male", defaults.male_voices, "Cherry");
+  fill("e-male", defaults.male_voices, "Ethan");
 
   const keyHint = defaults.has_api_key
     ? "(server has default — leave blank)"
