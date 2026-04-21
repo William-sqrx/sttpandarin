@@ -1,6 +1,16 @@
-"""qwen-tts synthesis + ffmpeg post-processing (speed, padding, concat)."""
+"""qwen-tts synthesis + ffmpeg post-processing (speed, padding, concat).
+
+Anti-clip strategy: qwen-tts truncates the final syllable on short inputs
+("你好" can render as just "你"). We append a throwaway filler phrase so the
+target text is no longer last, then detect the silence gap between the text and
+the filler and cut the audio there. For longer sentences with internal commas
+we pick the *longest* silence rather than the first one, which reliably
+corresponds to the pre-filler gap (a sentence-ending period pause + the
+filler's leading comma pause merged).
+"""
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +26,11 @@ dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
 MODEL_DEFAULT = "qwen3-tts-flash"
 FEMALE_VOICES = ["Cherry", "Serena", "Chelsie"]
 MALE_VOICES = ["Ethan", "Neil"]
+
+TTS_FILLER = "，再见。"
+SILENCE_NOISE_DB = "-30dB"
+SILENCE_MIN_DUR = "0.15"
+CUT_BUFFER_SECONDS = 0.15
 
 
 class TTSError(RuntimeError):
@@ -75,26 +90,59 @@ def synthesize_with_retry(
             time.sleep(2 * other_attempt)
 
 
-def wav_to_mp3(
-    wav_bytes: bytes,
+def _find_cut_point(wav_path: Path) -> float | None:
+    """Return the timestamp at which to cut the filler off.
+
+    Strategy: among all silences detected after t>0, pick the *longest*. That
+    one is almost always the gap between the user's text (ending with a natural
+    pause) and the filler's leading comma pause, which merge into a single
+    prolonged silence.
+    """
+    result = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-nostats", "-i", str(wav_path),
+            "-af", f"silencedetect=noise={SILENCE_NOISE_DB}:d={SILENCE_MIN_DUR}",
+            "-f", "null", "-",
+        ],
+        capture_output=True, text=True,
+    )
+    starts = [float(m) for m in re.findall(r"silence_start:\s*(-?[\d.]+)", result.stderr)]
+    durs = [float(m) for m in re.findall(r"silence_duration:\s*([\d.]+)", result.stderr)]
+    silences = [(s, d) for s, d in zip(starts, durs) if s > 0]
+    if not silences:
+        return None
+    return max(silences, key=lambda sd: sd[1])[0]
+
+
+def synthesize_piece_mp3(
+    text: str,
+    voice: str,
+    model: str,
+    api_key: str,
     speed: float = 1.0,
     tail_pad_seconds: float = 0.3,
     bitrate: str = "192k",
 ) -> bytes:
-    """Convert WAV to MP3 with optional speed change + tail padding."""
+    """Synthesize one text piece. Appends filler + cuts it off so the
+    target text is never truncated at the end. Applies speed + pad.
+    """
     _require_ffmpeg()
-    filters = []
-    if abs(speed - 1.0) > 1e-3:
-        filters.append(f"atempo={speed}")
-    if tail_pad_seconds > 0:
-        filters.append(f"apad=pad_dur={tail_pad_seconds}")
+    wav_bytes = synthesize_with_retry(text + TTS_FILLER, voice, model, api_key)
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as src, \
          tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as dst:
         src_path, dst_path = Path(src.name), Path(dst.name)
         src.write(wav_bytes)
     try:
+        cut_at = _find_cut_point(src_path)
         cmd = ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src_path)]
+        if cut_at is not None:
+            cmd += ["-t", f"{cut_at + CUT_BUFFER_SECONDS:.3f}"]
+        filters = []
+        if abs(speed - 1.0) > 1e-3:
+            filters.append(f"atempo={speed}")
+        if tail_pad_seconds > 0:
+            filters.append(f"apad=pad_dur={tail_pad_seconds}")
         if filters:
             cmd += ["-af", ",".join(filters)]
         cmd += ["-ab", bitrate, str(dst_path)]
@@ -168,8 +216,10 @@ def build_segment(
     for text, voice in pieces:
         if not text.strip():
             continue
-        wav = synthesize_with_retry(text, voice, model, api_key)
-        mp3 = wav_to_mp3(wav, speed=speed, tail_pad_seconds=tail_pad)
+        mp3 = synthesize_piece_mp3(
+            text, voice, model, api_key,
+            speed=speed, tail_pad_seconds=tail_pad,
+        )
         rendered.append(mp3)
 
     if not rendered:
