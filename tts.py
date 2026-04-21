@@ -13,9 +13,9 @@ from dashscope.audio.qwen_tts import SpeechSynthesizer
 
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
 
-MODEL_DEFAULT = "qwen-tts"
+MODEL_DEFAULT = "qwen3-tts-flash"
 FEMALE_VOICES = ["Cherry", "Serena", "Chelsie"]
-MALE_VOICES = ["Ethan"]
+MALE_VOICES = ["Ethan", "Neil"]
 
 
 class TTSError(RuntimeError):
