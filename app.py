@@ -21,13 +21,22 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeSerializer
+from pydantic import BaseModel
 
+import db
 from excel_parser import parse_instructions, parse_questions
-from tts import FEMALE_VOICES, MALE_VOICES, MODEL_DEFAULT, TTSError, build_segment
+from pinyin_util import annotate_with_pinyin, pinyin_options
+from tts import FEMALE_VOICES, MALE_VOICES, MODEL_DEFAULT, TTSError, build_segment, synthesize_piece_mp3
 
 APP_PASSWORD = os.getenv("APP_PASSWORD", "chinesely")
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
@@ -257,6 +266,137 @@ async def start_words_job(
 
     threading.Thread(target=worker, daemon=True).start()
     return JSONResponse({"job_id": job.id})
+
+
+# ----- HSK browser (MongoDB) -----
+
+class WordEditBody(BaseModel):
+    pinyin: str | None = None
+    english: str | None = None
+
+
+class RegenBody(BaseModel):
+    pinyin: str | None = None   # optional override: saved + used as hint for TTS
+    voice: str = "Serena"
+    model: str = MODEL_DEFAULT
+    speed: float = 1.0
+    tail_pad: float = 0.3
+    api_key: str = ""
+
+
+@app.get("/api/hsk/levels")
+async def hsk_levels(request: Request) -> JSONResponse:
+    _require_auth(request)
+    return JSONResponse({"levels": db.list_levels()})
+
+
+@app.get("/api/hsk/lessons")
+async def hsk_lessons(level: str, request: Request) -> JSONResponse:
+    _require_auth(request)
+    if level not in db.list_levels():
+        raise HTTPException(status_code=400, detail="level must be 1–6")
+    try:
+        lessons = db.list_lessons(level)
+    except db.DBError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse({"lessons": lessons})
+
+
+@app.get("/api/hsk/lessons/{lesson_id}/words")
+async def hsk_lesson_words(lesson_id: str, request: Request) -> JSONResponse:
+    _require_auth(request)
+    try:
+        data = db.get_lesson_words(lesson_id)
+    except db.DBError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    for w in data["words"]:
+        w["pinyinOptions"] = pinyin_options(w["chinese"], w["pinyin"])
+    return JSONResponse(data)
+
+
+@app.get("/api/hsk/lessons/{lesson_id}/words/{index}/audio")
+async def hsk_word_audio(lesson_id: str, index: int, request: Request) -> Response:
+    _require_auth(request)
+    try:
+        audio = db.get_word_audio(lesson_id, index)
+    except db.DBError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not audio:
+        raise HTTPException(status_code=404, detail="no audio for this word")
+    return Response(
+        content=audio,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.patch("/api/hsk/lessons/{lesson_id}/words/{index}")
+async def hsk_word_edit(
+    lesson_id: str,
+    index: int,
+    body: WordEditBody,
+    request: Request,
+) -> JSONResponse:
+    _require_auth(request)
+    try:
+        updated = db.update_word_fields(
+            lesson_id, index,
+            pinyin=body.pinyin,
+            english=body.english,
+        )
+    except db.DBError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return JSONResponse(updated)
+
+
+@app.post("/api/hsk/lessons/{lesson_id}/words/{index}/regenerate")
+async def hsk_word_regenerate(
+    lesson_id: str,
+    index: int,
+    body: RegenBody,
+    request: Request,
+) -> JSONResponse:
+    _require_auth(request)
+    try:
+        key = _resolve_api_key(body.api_key)
+    except TTSError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    word = db._find_word_in_lesson(lesson_id, index)
+    if not word or not word["chinese"]:
+        raise HTTPException(status_code=404, detail="word not found")
+
+    # Save pinyin override (if provided) before regenerating so the DB reflects
+    # the user's intent even if TTS fails midway.
+    pinyin_for_tts = word["pinyin"]
+    if body.pinyin is not None and body.pinyin.strip():
+        pinyin_for_tts = body.pinyin.strip()
+        db.update_word_fields(lesson_id, index, pinyin=pinyin_for_tts)
+
+    text = annotate_with_pinyin(word["chinese"], pinyin_for_tts) if pinyin_for_tts else word["chinese"]
+
+    try:
+        mp3 = synthesize_piece_mp3(
+            text=text,
+            voice=body.voice,
+            model=body.model,
+            api_key=key,
+            speed=body.speed,
+            tail_pad_seconds=body.tail_pad,
+        )
+    except TTSError as e:
+        raise HTTPException(status_code=502, detail=f"TTS failed: {e}")
+
+    try:
+        db.update_word_audio(lesson_id, index, mp3)
+    except db.DBError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return JSONResponse({
+        "ok": True,
+        "bytes": len(mp3),
+        "pinyin": pinyin_for_tts,
+    })
 
 
 # ----- exam job -----

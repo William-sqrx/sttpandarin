@@ -1,9 +1,10 @@
 # Chinesely TTS webapp
 
-Password-gated web UI that wraps Alibaba DashScope `qwen-tts`. Two features:
+Password-gated web UI that wraps Alibaba DashScope `qwen-tts`. Three features:
 
 1. **Words → MP3 folder**: upload a `.txt` file (one word/phrase per line), get a ZIP of `<word>.mp3` files.
 2. **HSK Exam Excel → audio pack**: upload an `.xlsx` following the HSK listening layout (5 papers × 20 rows, parts 1–4) and an optional `Exam Instructions` sheet. Returns a ZIP organized as `Paper N/PartX/Q##.mp3` plus `Instructions/I##.mp3`.
+3. **HSK Browser**: pick an HSK level and lesson from MongoDB (`HelloGuru.newlessons`), play each word's audio, edit pinyin/meaning, and regenerate audio. Writes back to `newlessons.newWords[].audioBlob` and syncs matching docs in the flat `words` collection. Requires `MONGODB_URI`.
 
 All TTS settings (voices, speed, pauses, repetition counts, model, throttle, API key override) are exposed in the UI.
 
@@ -17,6 +18,8 @@ pip install -r requirements.txt
 
 export APP_PASSWORD="pick-a-password"
 export DASHSCOPE_API_KEY="sk-..."
+export MONGODB_URI="mongodb+srv://..."   # needed for the HSK Browser tab
+# (optional) export MONGODB_DB="HelloGuru"
 # (optional) export SESSION_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32))')"
 
 uvicorn app:app --reload --port 8000
