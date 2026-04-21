@@ -314,11 +314,11 @@ async def hsk_lesson_words(lesson_id: str, request: Request) -> JSONResponse:
     return JSONResponse(data)
 
 
-@app.get("/api/hsk/lessons/{lesson_id}/words/{index}/audio")
-async def hsk_word_audio(lesson_id: str, index: int, request: Request) -> Response:
+@app.get("/api/hsk/words/{word_id}/audio")
+async def hsk_word_audio(word_id: str, request: Request) -> Response:
     _require_auth(request)
     try:
-        audio = db.get_word_audio(lesson_id, index)
+        audio = db.get_word_audio(word_id)
     except db.DBError as e:
         raise HTTPException(status_code=500, detail=str(e))
     if not audio:
@@ -330,17 +330,16 @@ async def hsk_word_audio(lesson_id: str, index: int, request: Request) -> Respon
     )
 
 
-@app.patch("/api/hsk/lessons/{lesson_id}/words/{index}")
+@app.patch("/api/hsk/words/{word_id}")
 async def hsk_word_edit(
-    lesson_id: str,
-    index: int,
+    word_id: str,
     body: WordEditBody,
     request: Request,
 ) -> JSONResponse:
     _require_auth(request)
     try:
         updated = db.update_word_fields(
-            lesson_id, index,
+            word_id,
             pinyin=body.pinyin,
             english=body.english,
         )
@@ -349,10 +348,9 @@ async def hsk_word_edit(
     return JSONResponse(updated)
 
 
-@app.post("/api/hsk/lessons/{lesson_id}/words/{index}/regenerate")
+@app.post("/api/hsk/words/{word_id}/regenerate")
 async def hsk_word_regenerate(
-    lesson_id: str,
-    index: int,
+    word_id: str,
     body: RegenBody,
     request: Request,
 ) -> JSONResponse:
@@ -362,7 +360,7 @@ async def hsk_word_regenerate(
     except TTSError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    word = db._find_word_in_lesson(lesson_id, index)
+    word = db.get_word(word_id)
     if not word or not word["chinese"]:
         raise HTTPException(status_code=404, detail="word not found")
 
@@ -371,7 +369,7 @@ async def hsk_word_regenerate(
     pinyin_for_tts = word["pinyin"]
     if body.pinyin is not None and body.pinyin.strip():
         pinyin_for_tts = body.pinyin.strip()
-        db.update_word_fields(lesson_id, index, pinyin=pinyin_for_tts)
+        db.update_word_fields(word_id, pinyin=pinyin_for_tts)
 
     text = annotate_with_pinyin(word["chinese"], pinyin_for_tts) if pinyin_for_tts else word["chinese"]
 
@@ -388,7 +386,7 @@ async def hsk_word_regenerate(
         raise HTTPException(status_code=502, detail=f"TTS failed: {e}")
 
     try:
-        db.update_word_audio(lesson_id, index, mp3)
+        db.update_word_audio(word_id, mp3)
     except db.DBError as e:
         raise HTTPException(status_code=500, detail=str(e))
 

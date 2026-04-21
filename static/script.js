@@ -160,12 +160,12 @@
     }
   });
 
-  function renderWords(lessonId, words) {
+  function renderWords(_lessonId, words) {
     hWords.innerHTML = "";
-    words.forEach(w => hWords.appendChild(renderWordRow(lessonId, w)));
+    words.forEach(w => hWords.appendChild(renderWordRow(w)));
   }
 
-  function renderWordRow(lessonId, w) {
+  function renderWordRow(w) {
     const row = document.createElement("div");
     row.className = "wordrow";
 
@@ -175,12 +175,23 @@
     hanzi.className = "hanzi";
     hanzi.textContent = w.chinese;
     col1.appendChild(hanzi);
+
+    if (!w.wordId) {
+      const missing = document.createElement("div");
+      missing.className = "muted";
+      missing.style.fontSize = "12px";
+      missing.textContent = "not found in words collection";
+      col1.appendChild(missing);
+      row.appendChild(col1);
+      return row;
+    }
+
     const audio = document.createElement("audio");
     audio.controls = true;
     audio.preload = "none";
     audio.style.width = "100%";
     audio.style.marginTop = "6px";
-    const audioUrl = `/api/hsk/lessons/${encodeURIComponent(lessonId)}/words/${w.index}/audio`;
+    const audioUrl = `/api/hsk/words/${encodeURIComponent(w.wordId)}/audio`;
     if (w.hasAudio) {
       audio.src = audioUrl;
     } else {
@@ -256,7 +267,7 @@
           english: mInput.value.trim(),
         };
         const updated = await fetchJson(
-          `/api/hsk/lessons/${encodeURIComponent(lessonId)}/words/${w.index}`,
+          `/api/hsk/words/${encodeURIComponent(w.wordId)}`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -286,7 +297,7 @@
           api_key: hApiKey.value,
         };
         const res = await fetchJson(
-          `/api/hsk/lessons/${encodeURIComponent(lessonId)}/words/${w.index}/regenerate`,
+          `/api/hsk/words/${encodeURIComponent(w.wordId)}/regenerate`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },

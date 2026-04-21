@@ -1,11 +1,16 @@
 """MongoDB access for the HSK Browser tab.
 
-Collections:
-- newlessons: { hskLevel: "1".."6", topicTitle, topicIndex, newWords: [{chinese, pinyin, english, audioBlob, ...}] }
-- words:      { chinese, pinyin, english, level: Number, audioBlob }
+Source of truth for word entries (audio + meaning) is the flat `words` collection.
+The `newlessons` collection is used only to group words into lessons (parts) for
+browsing.
 
-Regenerated audio is written to both: the lesson's embedded newWords[idx].audioBlob
-and the matching flat words doc (matched on chinese+pinyin+english).
+Collections:
+- newlessons: { hskLevel: "1".."6", topicTitle, topicIndex, newWords: [{chinese, pinyin, english, ...}] }
+- words:      { _id, chinese, pinyin, english, level: Number, audioBlob }
+
+Lookup strategy: each newWords entry is matched against `words` by
+chinese + pinyin + english. The matched word's `_id` is the identity used by
+audio / regenerate / edit endpoints.
 """
 
 from functools import lru_cache
@@ -49,6 +54,21 @@ def _norm(s: str) -> str:
     return (s or "").strip()
 
 
+def _to_bytes(blob: Any) -> bytes | None:
+    if blob is None:
+        return None
+    if isinstance(blob, Binary):
+        return bytes(blob)
+    if isinstance(blob, (bytes, bytearray)):
+        return bytes(blob)
+    # mongoose sometimes stores Buffer as {buffer: <Binary>} or {data: [..]}
+    if isinstance(blob, dict):
+        inner = blob.get("buffer") or blob.get("data")
+        if isinstance(inner, (bytes, bytearray, Binary)):
+            return bytes(inner)
+    return None
+
+
 def list_levels() -> list[str]:
     return ["1", "2", "3", "4", "5", "6"]
 
@@ -71,133 +91,141 @@ def list_lessons(level: str) -> list[dict[str, Any]]:
 
 
 def get_lesson_words(lesson_id: str) -> dict[str, Any]:
-    doc = lessons_col().find_one(
+    """Return the lesson's word list, with each word resolved to its
+    canonical entry in the `words` collection (id, current pinyin/english,
+    audio presence). Words missing from `words` are still included with
+    `wordId = None`.
+    """
+    lesson = lessons_col().find_one(
         {"_id": ObjectId(lesson_id)},
-        {"newWords.audioBlob": 0},
+        {"topicTitle": 1, "hskLevel": 1, "newWords.chinese": 1, "newWords.pinyin": 1, "newWords.english": 1},
     )
-    if not doc:
+    if not lesson:
         raise DBError("lesson not found")
-    words = []
-    for i, w in enumerate(doc.get("newWords") or []):
-        words.append({
-            "index": i,
-            "chinese": w.get("chinese", ""),
-            "pinyin": w.get("pinyin", ""),
-            "english": w.get("english", ""),
-            "hasAudio": False,  # filled in below
-        })
-    # Compute hasAudio without loading blobs
-    raw = lessons_col().find_one(
-        {"_id": ObjectId(lesson_id)},
-        {"newWords.audioBlob": 1},
-    )
-    for i, w in enumerate((raw or {}).get("newWords") or []):
-        if i < len(words):
-            words[i]["hasAudio"] = bool(w.get("audioBlob"))
+
+    level_int: int | None = None
+    try:
+        level_int = int(str(lesson.get("hskLevel", "")).strip())
+    except ValueError:
+        level_int = None
+
+    new_words = lesson.get("newWords") or []
+
+    # Bulk-fetch matching words for this level, then index them so we don't
+    # do N queries.
+    triples = [
+        (_norm(w.get("chinese", "")), _norm(w.get("pinyin", "")), _norm(w.get("english", "")))
+        for w in new_words
+    ]
+    by_triple: dict[tuple[str, str, str], dict[str, Any]] = {}
+    by_chinese: dict[str, list[dict[str, Any]]] = {}
+
+    chinese_set = {t[0] for t in triples if t[0]}
+    if chinese_set:
+        wfilter: dict[str, Any] = {"chinese": {"$in": list(chinese_set)}}
+        if level_int is not None:
+            wfilter["level"] = level_int
+        for wd in words_col().find(
+            wfilter,
+            {"chinese": 1, "pinyin": 1, "english": 1, "level": 1, "audioBlob": 1},
+        ):
+            ch = _norm(wd.get("chinese", ""))
+            py = _norm(wd.get("pinyin", ""))
+            en = _norm(wd.get("english", ""))
+            entry = {
+                "wordId": str(wd["_id"]),
+                "chinese": ch,
+                "pinyin": py,
+                "english": en,
+                "level": wd.get("level"),
+                "hasAudio": bool(_to_bytes(wd.get("audioBlob"))),
+            }
+            by_triple[(ch, py, en)] = entry
+            by_chinese.setdefault(ch, []).append(entry)
+
+    out_words = []
+    for i, (ch, py, en) in enumerate(triples):
+        match = by_triple.get((ch, py, en))
+        if not match:
+            # Fall back to chinese-only match (pinyin/english may have drifted).
+            candidates = by_chinese.get(ch, [])
+            if len(candidates) == 1:
+                match = candidates[0]
+
+        if match:
+            out_words.append({
+                "index": i,
+                "wordId": match["wordId"],
+                "chinese": match["chinese"],
+                "pinyin": match["pinyin"],
+                "english": match["english"],
+                "hasAudio": match["hasAudio"],
+            })
+        else:
+            out_words.append({
+                "index": i,
+                "wordId": None,
+                "chinese": ch,
+                "pinyin": py,
+                "english": en,
+                "hasAudio": False,
+            })
+
     return {
-        "_id": str(doc["_id"]),
-        "topicTitle": doc.get("topicTitle", ""),
-        "hskLevel": doc.get("hskLevel", ""),
-        "words": words,
+        "_id": str(lesson["_id"]),
+        "topicTitle": lesson.get("topicTitle", ""),
+        "hskLevel": lesson.get("hskLevel", ""),
+        "words": out_words,
     }
 
 
-def get_word_audio(lesson_id: str, index: int) -> bytes | None:
-    doc = lessons_col().find_one(
-        {"_id": ObjectId(lesson_id)},
-        {"newWords": 1},
+def get_word_audio(word_id: str) -> bytes | None:
+    doc = words_col().find_one({"_id": ObjectId(word_id)}, {"audioBlob": 1})
+    if not doc:
+        return None
+    return _to_bytes(doc.get("audioBlob"))
+
+
+def get_word(word_id: str) -> dict[str, Any] | None:
+    doc = words_col().find_one(
+        {"_id": ObjectId(word_id)},
+        {"chinese": 1, "pinyin": 1, "english": 1, "level": 1},
     )
     if not doc:
         return None
-    words = doc.get("newWords") or []
-    if index < 0 or index >= len(words):
-        return None
-    blob = words[index].get("audioBlob")
-    if not blob:
-        return None
-    if isinstance(blob, Binary):
-        return bytes(blob)
-    if isinstance(blob, (bytes, bytearray)):
-        return bytes(blob)
-    # mongoose sometimes stores Buffer as {buffer: <Binary>}
-    if isinstance(blob, dict):
-        inner = blob.get("buffer") or blob.get("data")
-        if isinstance(inner, (bytes, bytearray, Binary)):
-            return bytes(inner)
-    return None
-
-
-def _find_word_in_lesson(lesson_id: str, index: int) -> dict[str, Any] | None:
-    doc = lessons_col().find_one(
-        {"_id": ObjectId(lesson_id)},
-        {"newWords.chinese": 1, "newWords.pinyin": 1, "newWords.english": 1, "hskLevel": 1},
-    )
-    if not doc:
-        return None
-    words = doc.get("newWords") or []
-    if index < 0 or index >= len(words):
-        return None
-    w = words[index]
     return {
-        "chinese": _norm(w.get("chinese", "")),
-        "pinyin": _norm(w.get("pinyin", "")),
-        "english": _norm(w.get("english", "")),
-        "hskLevel": doc.get("hskLevel", ""),
+        "wordId": str(doc["_id"]),
+        "chinese": _norm(doc.get("chinese", "")),
+        "pinyin": _norm(doc.get("pinyin", "")),
+        "english": _norm(doc.get("english", "")),
+        "level": doc.get("level"),
     }
 
 
-def update_word_audio(lesson_id: str, index: int, mp3_bytes: bytes) -> None:
-    # Snapshot the word's identity BEFORE any pinyin/meaning edits, so the
-    # words-collection match still works.
-    before = _find_word_in_lesson(lesson_id, index)
+def update_word_audio(word_id: str, mp3_bytes: bytes) -> None:
     blob = Binary(mp3_bytes)
-    lessons_col().update_one(
-        {"_id": ObjectId(lesson_id)},
-        {"$set": {f"newWords.{index}.audioBlob": blob}},
+    words_col().update_one(
+        {"_id": ObjectId(word_id)},
+        {"$set": {"audioBlob": blob}},
     )
-    if before and before["chinese"] and before["pinyin"] and before["english"]:
-        words_col().update_many(
-            {
-                "chinese": before["chinese"],
-                "pinyin": before["pinyin"],
-                "english": before["english"],
-            },
-            {"$set": {"audioBlob": blob}},
-        )
 
 
 def update_word_fields(
-    lesson_id: str,
-    index: int,
+    word_id: str,
     *,
     pinyin: str | None = None,
     english: str | None = None,
 ) -> dict[str, Any]:
-    before = _find_word_in_lesson(lesson_id, index)
-    if not before:
+    update: dict[str, Any] = {}
+    if pinyin is not None:
+        update["pinyin"] = pinyin
+    if english is not None:
+        update["english"] = english
+    if update:
+        res = words_col().update_one({"_id": ObjectId(word_id)}, {"$set": update})
+        if res.matched_count == 0:
+            raise DBError("word not found")
+    word = get_word(word_id)
+    if not word:
         raise DBError("word not found")
-
-    set_lesson: dict[str, Any] = {}
-    words_filter_before = {
-        "chinese": before["chinese"],
-        "pinyin": before["pinyin"],
-        "english": before["english"],
-    }
-    words_set: dict[str, Any] = {}
-
-    if pinyin is not None and pinyin != before["pinyin"]:
-        set_lesson[f"newWords.{index}.pinyin"] = pinyin
-        words_set["pinyin"] = pinyin
-    if english is not None and english != before["english"]:
-        set_lesson[f"newWords.{index}.english"] = english
-        words_set["english"] = english
-
-    if set_lesson:
-        lessons_col().update_one(
-            {"_id": ObjectId(lesson_id)},
-            {"$set": set_lesson},
-        )
-    if words_set and before["chinese"]:
-        words_col().update_many(words_filter_before, {"$set": words_set})
-
-    return _find_word_in_lesson(lesson_id, index) or {}
+    return word
