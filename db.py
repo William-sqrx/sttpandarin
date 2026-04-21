@@ -8,7 +8,6 @@ Regenerated audio is written to both: the lesson's embedded newWords[idx].audioB
 and the matching flat words doc (matched on chinese+pinyin+english).
 """
 
-import os
 from functools import lru_cache
 from typing import Any
 
@@ -17,7 +16,8 @@ from pymongo import MongoClient
 from pymongo.collection import Collection
 
 
-DB_NAME = os.getenv("MONGODB_DB", "HelloGuru")
+MONGODB_URI = "mongodb+srv://williamjacob0910:william0910@chinesely.o0j4daa.mongodb.net/HelloGuru?retryWrites=true&w=majority&appName=HelloGuru"
+DB_NAME = "HelloGuru"
 
 
 class DBError(RuntimeError):
@@ -26,10 +26,7 @@ class DBError(RuntimeError):
 
 @lru_cache(maxsize=1)
 def _client() -> MongoClient:
-    uri = os.getenv("MONGODB_URI", "").strip()
-    if not uri:
-        raise DBError("MONGODB_URI is not set")
-    return MongoClient(uri, serverSelectionTimeoutMS=8000)
+    return MongoClient(MONGODB_URI, serverSelectionTimeoutMS=8000)
 
 
 def lessons_col() -> Collection:
