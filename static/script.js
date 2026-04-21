@@ -1,7 +1,16 @@
 (async function () {
-  // Tab switching
+  // Tab switching (HSK tab is gated by an extra password)
+  const HSK_PASSWORD = "michelle";
   const tabs = document.querySelectorAll(".tab");
   tabs.forEach(t => t.addEventListener("click", () => {
+    if (t.dataset.tab === "hsk" && sessionStorage.getItem("hskUnlocked") !== "1") {
+      const entered = window.prompt("Enter password for HSK Browser:");
+      if (entered !== HSK_PASSWORD) {
+        if (entered !== null) window.alert("Wrong password.");
+        return;
+      }
+      sessionStorage.setItem("hskUnlocked", "1");
+    }
     tabs.forEach(x => x.classList.toggle("active", x === t));
     document.getElementById("panel-words").hidden = t.dataset.tab !== "words";
     document.getElementById("panel-exam").hidden = t.dataset.tab !== "exam";
