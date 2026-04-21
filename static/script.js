@@ -32,14 +32,13 @@
   fill("w-voice", [...defaults.female_voices, ...defaults.male_voices], "Serena");
   fill("e-female", defaults.female_voices, "Serena");
   fill("e-male", defaults.male_voices, "Ethan");
-  fill("h-voice", [...defaults.female_voices, ...defaults.male_voices], "Serena");
+  fill("h-voice", ["Cherry"], "Cherry");
 
   const keyHint = defaults.has_api_key
     ? "(server has default — leave blank)"
     : "(required — server has no default)";
   document.getElementById("w-key-hint").textContent = keyHint;
   document.getElementById("e-key-hint").textContent = keyHint;
-  document.getElementById("h-key-hint").textContent = keyHint;
 
   // Generic job submit + poll
   async function submitJob(endpoint, form, progressEl, barEl, statusEl, dlEl) {
@@ -108,8 +107,6 @@
   const hStatus  = document.getElementById("h-status");
   const hWords   = document.getElementById("h-words");
   const hVoice   = document.getElementById("h-voice");
-  const hSpeed   = document.getElementById("h-speed");
-  const hApiKey  = document.getElementById("h-api-key");
 
   function setHStatus(msg, isErr) {
     hStatus.textContent = msg || "";
@@ -293,8 +290,6 @@
         const body = {
           pinyin: selectedPinyin(),
           voice: hVoice.value,
-          speed: parseFloat(hSpeed.value || "1.0"),
-          api_key: hApiKey.value,
         };
         const res = await fetchJson(
           `/api/hsk/words/${encodeURIComponent(w.wordId)}/regenerate`,
