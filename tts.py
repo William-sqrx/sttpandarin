@@ -15,7 +15,7 @@ dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
 
 MODEL_DEFAULT = "qwen-tts"
 FEMALE_VOICES = ["Cherry", "Serena", "Chelsie"]
-MALE_VOICES = ["Ethan", "Neil"]
+MALE_VOICES = ["Ethan"]
 
 
 class TTSError(RuntimeError):

@@ -268,7 +268,7 @@ async def start_exam_job(
     female_voice: str = Form("Serena"),
     male_voice: str = Form("Ethan"),
     model: str = Form(MODEL_DEFAULT),
-    speed: float = Form(0.9),
+    speed: float = Form(1.0),
     tail_pad: float = Form(0.3),
     gap_between_speakers: float = Form(0.6),
     gap_between_repeats: float = Form(1.0),
