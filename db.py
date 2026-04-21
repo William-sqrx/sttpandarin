@@ -11,12 +11,20 @@ and the matching flat words doc (matched on chinese+pinyin+english).
 from functools import lru_cache
 from typing import Any
 
+import dns.resolver
 from bson import Binary, ObjectId
 from pymongo import MongoClient
 from pymongo.collection import Collection
 
+# Render's default resolver returns NXDOMAIN for Atlas SRV records. Point
+# dnspython at Google DNS so `mongodb+srv://` lookups succeed.
+_resolver = dns.resolver.Resolver(configure=False)
+_resolver.nameservers = ["8.8.8.8", "8.8.4.4", "1.1.1.1"]
+_resolver.lifetime = 10.0
+dns.resolver.default_resolver = _resolver
 
-MONGODB_URI = "mongodb+srv://williamjacob0910:william0910@chinesely.o0j4daa.mongodb.net/HelloGuru?retryWrites=true&w=majority&appName=HelloGuru"
+
+MONGODB_URI = "mongodb+srv://williamjacob0910:william0910@chinesefish0910.kjyudat.mongodb.net/?appName=ChineseFish0910"
 DB_NAME = "HelloGuru"
 
 
