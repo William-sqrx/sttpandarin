@@ -135,9 +135,17 @@ def synthesize_piece_mp3(
         src.write(wav_bytes)
     try:
         cut_at = _find_cut_point(src_path)
-        cmd = ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src_path)]
+        # -t must be an INPUT option (before -i) so ffmpeg trims the raw WAV
+        # first and then runs atempo/apad on the trimmed audio. Placing -t
+        # after -i makes it cap the OUTPUT duration, which cuts off the final
+        # syllable whenever speed < 1.0 (atempo stretches the audio past the
+        # cap) and also discards everything apad adds. That's the bug users
+        # reported where tail_pad had no effect and "shàngkè" rendered as
+        # "shàngk".
+        cmd = ["ffmpeg", "-loglevel", "error", "-y"]
         if cut_at is not None:
             cmd += ["-t", f"{cut_at + CUT_BUFFER_SECONDS:.3f}"]
+        cmd += ["-i", str(src_path)]
         filters = []
         if abs(speed - 1.0) > 1e-3:
             filters.append(f"atempo={speed}")

@@ -16,17 +16,11 @@ audio / regenerate / edit endpoints.
 from functools import lru_cache
 from typing import Any
 
-import dns.resolver
 from bson import Binary, ObjectId
 from pymongo import MongoClient
 from pymongo.collection import Collection
 
-# Render's default resolver returns NXDOMAIN for Atlas SRV records. Point
-# dnspython at Google DNS so `mongodb+srv://` lookups succeed.
-_resolver = dns.resolver.Resolver(configure=False)
-_resolver.nameservers = ["8.8.8.8", "8.8.4.4", "1.1.1.1"]
-_resolver.lifetime = 10.0
-dns.resolver.default_resolver = _resolver
+# Let pymongo/dnspython use the platform's default resolver.
 
 
 MONGODB_URI = "mongodb+srv://williamjacob0910:william0910@chinesefish0910.kjyudat.mongodb.net/?appName=ChineseFish0910"
@@ -52,6 +46,21 @@ def words_col() -> Collection:
 
 def _norm(s: str) -> str:
     return (s or "").strip()
+
+
+_PAREN_RE = None
+
+
+def _strip_parens(s: str) -> str:
+    """Strip any (..) / （..) parenthetical content from a chinese string.
+    textbook entries like '锯(子)' or '没有（没)' map to plain-form words
+    stored as '锯' / '没有' in the words collection.
+    """
+    import re
+    global _PAREN_RE
+    if _PAREN_RE is None:
+        _PAREN_RE = re.compile(r"[（(][^)）]*[)）]")
+    return _PAREN_RE.sub("", s or "").strip()
 
 
 def _to_bytes(blob: Any) -> bytes | None:
@@ -120,7 +129,15 @@ def get_lesson_words(lesson_id: str) -> dict[str, Any]:
     by_triple: dict[tuple[str, str, str], dict[str, Any]] = {}
     by_chinese: dict[str, list[dict[str, Any]]] = {}
 
-    chinese_set = {t[0] for t in triples if t[0]}
+    # Include both raw chinese and paren-stripped variants in the lookup set
+    # so entries like '没有（没)' still resolve to '没有' in words.
+    chinese_set: set[str] = set()
+    for t in triples:
+        if t[0]:
+            chinese_set.add(t[0])
+            stripped = _strip_parens(t[0])
+            if stripped and stripped != t[0]:
+                chinese_set.add(stripped)
     if chinese_set:
         wfilter: dict[str, Any] = {"chinese": {"$in": list(chinese_set)}}
         if level_int is not None:
@@ -151,6 +168,13 @@ def get_lesson_words(lesson_id: str) -> dict[str, Any]:
             candidates = by_chinese.get(ch, [])
             if len(candidates) == 1:
                 match = candidates[0]
+        if not match:
+            # Try paren-stripped chinese: '没有（没)' → '没有', '锯(子)' → '锯'.
+            stripped = _strip_parens(ch)
+            if stripped and stripped != ch:
+                candidates = by_chinese.get(stripped, [])
+                if len(candidates) == 1:
+                    match = candidates[0]
 
         if match:
             out_words.append({
