@@ -612,7 +612,7 @@
     const img = new Image();
     img.src = "/api/sprite/" + meta.id + "/image?t=" + Date.now();
 
-    let frame = 0;
+    let frame = 1;  // frame 0 is the static reference — skip it in animation
     let last = 0;
     const interval = 1000 / FPS;
     let cancelled = false;
@@ -633,7 +633,7 @@
       const sh    = img.naturalHeight / rows;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, col * sw, row * sh, sw, sh, 0, 0, canvas.width, canvas.height);
-      frame = (frame + 1) % total;
+      frame = (frame % (total - 1)) + 1;  // loop 1..total-1, never hit frame 0
     }
     requestAnimationFrame(draw);
   }
@@ -736,5 +736,91 @@
         break;
       }
     }
+  });
+
+  // ===== Test sprite-sheet uploader =====
+  // Drop a PNG, choose grid, watch it animate in place — same draw loop as
+  // generated sheets. Lets us verify whether OpenAI image-edit output is
+  // structurally correct (frame layout, alignment) without a full round-trip.
+  const fsTestDrop   = document.getElementById("fs-test-drop");
+  const fsTestInput  = document.getElementById("fs-test-input");
+  const fsTestLabel  = document.getElementById("fs-test-label");
+  const fsTestColsEl = document.getElementById("fs-test-cols");
+  const fsTestRowsEl = document.getElementById("fs-test-rows");
+  const fsTestClear  = document.getElementById("fs-test-clear");
+  const fsTestCanvas = document.getElementById("fs-test-canvas");
+  let fsTestImg = null;
+  let fsTestUrl = null;
+  let fsTestCancel = null;
+
+  function fsTestStart() {
+    if (!fsTestImg) return;
+    if (fsTestCancel) fsTestCancel();
+    const ctx = fsTestCanvas.getContext("2d");
+    let frame = 1;             // skip frame 0 (static reference)
+    let last  = 0;
+    const interval = 1000 / FPS;
+    let cancelled = false;
+    fsTestCancel = () => { cancelled = true; };
+    function draw(ts) {
+      if (cancelled) return;
+      requestAnimationFrame(draw);
+      if (!fsTestImg.complete || fsTestImg.naturalWidth === 0) return;
+      if (ts - last < interval) return;
+      last = ts;
+      const cols  = Math.max(1, parseInt(fsTestColsEl.value, 10) || 4);
+      const rows  = Math.max(1, parseInt(fsTestRowsEl.value, 10) || 4);
+      const total = cols * rows;
+      const col   = frame % cols;
+      const row   = Math.floor(frame / cols);
+      const sw    = fsTestImg.naturalWidth  / cols;
+      const sh    = fsTestImg.naturalHeight / rows;
+      ctx.clearRect(0, 0, fsTestCanvas.width, fsTestCanvas.height);
+      ctx.drawImage(fsTestImg, col * sw, row * sh, sw, sh,
+                    0, 0, fsTestCanvas.width, fsTestCanvas.height);
+      frame = total > 1 ? (frame % (total - 1)) + 1 : 0;
+    }
+    requestAnimationFrame(draw);
+  }
+
+  function fsTestSetFile(file) {
+    if (!file || file.type !== "image/png") {
+      fsStatus.textContent = "Test sheet must be a PNG.";
+      return;
+    }
+    if (fsTestUrl) URL.revokeObjectURL(fsTestUrl);
+    fsTestUrl = URL.createObjectURL(file);
+    fsTestImg = new Image();
+    fsTestImg.onload = () => fsTestStart();
+    fsTestImg.src = fsTestUrl;
+    fsTestLabel.textContent = file.name;
+    fsTestClear.disabled = false;
+  }
+
+  fsTestDrop.addEventListener("click", () => fsTestInput.click());
+  fsTestInput.addEventListener("change", () => fsTestSetFile(fsTestInput.files[0]));
+  fsTestDrop.addEventListener("dragover",  e => { e.preventDefault(); fsTestDrop.classList.add("drag-over"); });
+  fsTestDrop.addEventListener("dragleave", () => fsTestDrop.classList.remove("drag-over"));
+  fsTestDrop.addEventListener("drop", e => {
+    e.preventDefault();
+    fsTestDrop.classList.remove("drag-over");
+    fsTestSetFile(e.dataTransfer.files[0]);
+  });
+  // Live re-grid when cols/rows change
+  fsTestColsEl.addEventListener("input", fsTestStart);
+  fsTestRowsEl.addEventListener("input", fsTestStart);
+  fsTestClear.addEventListener("click", () => {
+    if (fsTestCancel) fsTestCancel();
+    if (fsTestUrl) { URL.revokeObjectURL(fsTestUrl); fsTestUrl = null; }
+    fsTestImg = null;
+    fsTestInput.value = "";
+    fsTestLabel.textContent = "Test sprite sheet — drop PNG or ";
+    const browse = document.createElement("label");
+    browse.htmlFor = "fs-test-input";
+    browse.className = "fs-browse";
+    browse.textContent = "browse";
+    fsTestLabel.appendChild(browse);
+    fsTestCanvas.getContext("2d").clearRect(0, 0, fsTestCanvas.width, fsTestCanvas.height);
+    fsTestClear.disabled = true;
   });
 })();

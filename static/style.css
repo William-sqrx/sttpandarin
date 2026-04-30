@@ -113,6 +113,22 @@ button.link:hover { color: var(--text); background: transparent; }
 .fs-status { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 18px; }
 .fs-status.err { color: var(--err); }
 
+/* Test sprite-sheet uploader (verify a sheet animates correctly) */
+.fs-test-row { display: flex; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.fs-test-drop { flex: 1; min-width: 220px; }
+.fs-test-grid { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.fs-test-grid input { width: 56px; padding: 4px 6px; font-size: 13px; border: 1px solid var(--border); border-radius: 4px; }
+#fs-test-clear { white-space: nowrap; margin: 0; background: #eef0f5; color: var(--text); }
+#fs-test-clear:disabled { opacity: .45; cursor: not-allowed; }
+#fs-test-canvas {
+  width: 128px; height: 128px;
+  background: #0d1f2a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  image-rendering: pixelated;
+  flex-shrink: 0;
+}
+
 /* Ocean */
 .fs-ocean {
   height: 500px;
