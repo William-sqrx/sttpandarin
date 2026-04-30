@@ -8,3 +8,4 @@ itsdangerous==2.2.0
 pymongo==4.10.1
 pypinyin==0.53.0
 python-dotenv==1.0.1
+Pillow>=10.0.0

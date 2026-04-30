@@ -83,3 +83,88 @@ button.link:hover { color: var(--text); background: transparent; }
   .wordrow { grid-template-columns: 1fr; }
   .wordrow .actions { flex-direction: row; flex-wrap: wrap; }
 }
+
+/* ── Fish Studio ─────────────────────────────────────────── */
+.panel-fish { padding: 0; overflow: hidden; }
+
+.fs-toolbar {
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.fs-upload-row { display: flex; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+
+.fs-drop-zone {
+  flex: 1; min-width: 200px; display: flex; align-items: center; gap: 10px;
+  border: 2px dashed var(--border); border-radius: 8px; padding: 10px 14px;
+  cursor: pointer; transition: border-color .2s; font-size: 14px; color: var(--muted);
+}
+.fs-drop-zone.drag-over { border-color: var(--accent); background: #fff5f3; }
+.fs-browse { color: var(--accent); cursor: pointer; font-weight: 600; }
+.fs-preview { width: 40px; height: 40px; object-fit: contain; border-radius: 4px; flex-shrink: 0; }
+
+#fs-gen-btn { white-space: nowrap; margin: 0; }
+#fs-gen-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.fs-status { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 18px; }
+.fs-status.err { color: var(--err); }
+
+/* Ocean */
+.fs-ocean {
+  height: 500px;
+  display: flex; flex-direction: column;
+  overflow: hidden; position: relative;
+}
+.fs-sky {
+  height: 20%;
+  background: linear-gradient(to bottom, #3ba8e6 0%, #ffe27a 100%);
+  flex-shrink: 0;
+}
+.fs-water {
+  flex: 1; position: relative; overflow: hidden;
+  background: linear-gradient(to bottom,
+    #e4f6c0 0%, #8ee0c4 20%, #3cc2cc 40%,
+    #1a98c4 60%, #0d70a8 80%, #054c7e 100%);
+}
+
+/* Subtle caustic shimmer lines */
+.fs-caustics {
+  position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    repeating-linear-gradient(90deg,
+      transparent 0px, transparent 18px,
+      rgba(255,255,255,0.07) 18px, rgba(255,255,255,0.07) 20px);
+  animation: caustic-drift 6s linear infinite;
+}
+@keyframes caustic-drift { from { background-position-x: 0; } to { background-position-x: 40px; } }
+
+/* Fish cards inside the water */
+.fs-fish-wrap {
+  position: absolute;
+  cursor: pointer;
+  transition: filter .15s;
+}
+.fs-fish-wrap:hover { filter: brightness(1.12); }
+.fs-fish-wrap.selected canvas { outline: 3px solid rgba(255,255,255,0.9); border-radius: 4px;
+                                  box-shadow: 0 0 14px rgba(255,255,255,0.6); }
+.fs-fish-delete {
+  position: absolute; top: -10px; right: -10px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #e53e3e; color: #fff; border: 2px solid #fff;
+  font-size: 13px; font-weight: 700; line-height: 18px; text-align: center;
+  cursor: pointer; display: none; padding: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+}
+.fs-fish-wrap.selected .fs-fish-delete { display: block; }
+
+/* Skeleton pulse while generating */
+.fs-fish-skeleton {
+  position: absolute;
+  width: 96px; height: 96px; border-radius: 8px;
+  background: rgba(255,255,255,0.15);
+  animation: fs-pulse 1.4s ease-in-out infinite;
+}
+@keyframes fs-pulse {
+  0%,100% { opacity: .4; } 50% { opacity: .9; }
+}

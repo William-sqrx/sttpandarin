@@ -1,20 +1,24 @@
 (async function () {
-  // Tab switching (HSK tab is gated by an extra password)
-  const HSK_PASSWORD = "michelle";
+  // Tab switching
+  const HSK_PASSWORD  = "michelle";
+  const FISH_PASSWORD = "william";
   const tabs = document.querySelectorAll(".tab");
+  const panels = ["words", "exam", "hsk", "fish"];
+
   tabs.forEach(t => t.addEventListener("click", () => {
     if (t.dataset.tab === "hsk" && sessionStorage.getItem("hskUnlocked") !== "1") {
       const entered = window.prompt("Enter password for HSK Browser:");
-      if (entered !== HSK_PASSWORD) {
-        if (entered !== null) window.alert("Wrong password.");
-        return;
-      }
+      if (entered !== HSK_PASSWORD) { if (entered !== null) window.alert("Wrong password."); return; }
       sessionStorage.setItem("hskUnlocked", "1");
     }
+    if (t.dataset.tab === "fish" && sessionStorage.getItem("fishUnlocked") !== "1") {
+      const entered = window.prompt("Enter password for Fish Studio:");
+      if (entered !== FISH_PASSWORD) { if (entered !== null) window.alert("Wrong password."); return; }
+      sessionStorage.setItem("fishUnlocked", "1");
+    }
+    if (t.dataset.tab === "fish") fsInit();
     tabs.forEach(x => x.classList.toggle("active", x === t));
-    document.getElementById("panel-words").hidden = t.dataset.tab !== "words";
-    document.getElementById("panel-exam").hidden = t.dataset.tab !== "exam";
-    document.getElementById("panel-hsk").hidden = t.dataset.tab !== "hsk";
+    panels.forEach(p => { document.getElementById("panel-" + p).hidden = t.dataset.tab !== p; });
   }));
 
   // Populate voice dropdowns from server defaults
@@ -314,4 +318,224 @@
 
     return row;
   }
+
+  // ===== Fish Studio =====
+  const FISH_POSITIONS = [
+    { x:  8, y: 22 }, { x: 36, y: 15 }, { x: 63, y: 28 }, { x: 82, y: 12 },
+    { x: 15, y: 50 }, { x: 46, y: 43 }, { x: 70, y: 55 }, { x: 87, y: 40 },
+    { x:  6, y: 72 }, { x: 32, y: 66 }, { x: 58, y: 76 }, { x: 76, y: 68 },
+  ];
+  const FPS = 12;
+  let fsLoaded = false;
+  let fsSelectedId = null;
+
+  function fsInit() {
+    if (fsLoaded) return;
+    fsLoaded = true;
+    fsLoadExisting();
+  }
+
+  async function fsLoadExisting() {
+    try {
+      const { sprites } = await fetchJson("/api/sprite/list");
+      sprites.forEach(meta => fsAddFish(meta));
+    } catch (e) {
+      document.getElementById("fs-status").textContent = "Failed to load sprites: " + e.message;
+    }
+  }
+
+  function fsNextPos() {
+    const water = document.getElementById("fs-water");
+    const count = water.querySelectorAll(".fs-fish-wrap, .fs-fish-skeleton").length;
+    return FISH_POSITIONS[count % FISH_POSITIONS.length];
+  }
+
+  function fsAddSkeleton() {
+    const pos = fsNextPos();
+    const sk = document.createElement("div");
+    sk.className = "fs-fish-skeleton";
+    sk.style.left  = pos.x + "%";
+    sk.style.top   = pos.y + "%";
+    document.getElementById("fs-water").appendChild(sk);
+    return sk;
+  }
+
+  function fsAddFish(meta) {
+    const water = document.getElementById("fs-water");
+    const pos = FISH_POSITIONS[water.querySelectorAll(".fs-fish-wrap").length % FISH_POSITIONS.length];
+
+    const wrap = document.createElement("div");
+    wrap.className = "fs-fish-wrap";
+    wrap.dataset.id = meta.id;
+    wrap.style.left = pos.x + "%";
+    wrap.style.top  = pos.y + "%";
+
+    const canvas = document.createElement("canvas");
+    const DISP = 96;
+    canvas.width  = DISP;
+    canvas.height = DISP;
+    wrap.appendChild(canvas);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "fs-fish-delete";
+    delBtn.textContent = "✕";
+    delBtn.title = "Delete";
+    wrap.appendChild(delBtn);
+
+    water.appendChild(wrap);
+    fsAnimate(canvas, meta);
+
+    wrap.addEventListener("click", (e) => {
+      if (e.target === delBtn) return;
+      const id = wrap.dataset.id;
+      if (fsSelectedId === id) {
+        wrap.classList.remove("selected");
+        fsSelectedId = null;
+      } else {
+        document.querySelectorAll(".fs-fish-wrap.selected").forEach(w => w.classList.remove("selected"));
+        wrap.classList.add("selected");
+        fsSelectedId = id;
+      }
+    });
+
+    delBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      delBtn.disabled = true;
+      try {
+        await fetch("/api/sprite/" + meta.id, { method: "DELETE" });
+        wrap.remove();
+        if (fsSelectedId === meta.id) fsSelectedId = null;
+      } catch (err) {
+        delBtn.disabled = false;
+      }
+    });
+
+    // Deselect on outside click
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".fs-fish-wrap")) {
+        document.querySelectorAll(".fs-fish-wrap.selected").forEach(w => w.classList.remove("selected"));
+        fsSelectedId = null;
+      }
+    }, { capture: false });
+
+    return wrap;
+  }
+
+  function fsAnimate(canvas, meta) {
+    const ctx = canvas.getContext("2d");
+    const img = new Image();
+    img.src = "/api/sprite/" + meta.id + "/image?t=" + Date.now();
+
+    let frame = 0;
+    let last = 0;
+    const interval = 1000 / FPS;
+    let cancelled = false;
+    canvas._cancelAnim = () => { cancelled = true; };
+
+    function draw(ts) {
+      if (cancelled) return;
+      requestAnimationFrame(draw);
+      if (!img.complete || img.naturalWidth === 0) return;
+      if (ts - last < interval) return;
+      last = ts;
+
+      const cols = meta.cols, rows = meta.rows;
+      const col  = frame % cols;
+      const row  = Math.floor(frame / cols);
+      const sw   = img.naturalWidth  / cols;
+      const sh   = img.naturalHeight / rows;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, col * sw, row * sh, sw, sh, 0, 0, canvas.width, canvas.height);
+      frame = (frame + 1) % (cols * rows);
+    }
+    requestAnimationFrame(draw);
+  }
+
+  // Upload + generate
+  const fsDropZone  = document.getElementById("fs-drop-zone");
+  const fsFileInput = document.getElementById("fs-file-input");
+  const fsGenBtn    = document.getElementById("fs-gen-btn");
+  const fsStatus    = document.getElementById("fs-status");
+  const fsPreview   = document.getElementById("fs-preview");
+  const fsDropLabel = document.getElementById("fs-drop-label");
+  let fsPendingFile = null;
+
+  function fsSetFile(file) {
+    if (!file || file.type !== "image/png") { fsStatus.textContent = "Please select a PNG file."; return; }
+    fsPendingFile = file;
+    const url = URL.createObjectURL(file);
+    fsPreview.src = url;
+    fsPreview.hidden = false;
+    fsDropLabel.textContent = file.name;
+    fsGenBtn.disabled = false;
+    fsStatus.textContent = "";
+  }
+
+  fsDropZone.addEventListener("click", () => fsFileInput.click());
+  fsFileInput.addEventListener("change", () => fsSetFile(fsFileInput.files[0]));
+  fsDropZone.addEventListener("dragover", e => { e.preventDefault(); fsDropZone.classList.add("drag-over"); });
+  fsDropZone.addEventListener("dragleave", () => fsDropZone.classList.remove("drag-over"));
+  fsDropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    fsDropZone.classList.remove("drag-over");
+    fsSetFile(e.dataTransfer.files[0]);
+  });
+
+  fsGenBtn.addEventListener("click", async () => {
+    if (!fsPendingFile) return;
+    fsGenBtn.disabled = true;
+    fsStatus.textContent = "Submitting…";
+    fsStatus.className = "fs-status";
+
+    const fd = new FormData();
+    fd.append("file", fsPendingFile);
+
+    let jobId;
+    try {
+      const r = await fetch("/api/sprite/generate", { method: "POST", body: fd });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
+      jobId = (await r.json()).job_id;
+    } catch (e) {
+      fsStatus.textContent = "Error: " + e.message;
+      fsStatus.className = "fs-status err";
+      fsGenBtn.disabled = false;
+      return;
+    }
+
+    // Add 3 skeleton placeholders
+    const skeletons = [fsAddSkeleton(), fsAddSkeleton(), fsAddSkeleton()];
+    let skIdx = 0;
+
+    // Poll
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000));
+      let j;
+      try { j = await fetchJson("/api/sprite/jobs/" + jobId); }
+      catch { break; }
+
+      fsStatus.textContent = `Generating… ${j.done}/${j.total}`;
+
+      // Swap each newly completed sprite in for a skeleton
+      while (skIdx < j.completed.length) {
+        const meta = j.completed[skIdx];
+        const sk = skeletons[skIdx];
+        if (sk && sk.parentNode) sk.remove();
+        fsAddFish(meta);
+        skIdx++;
+      }
+
+      if (j.status === "done" || j.status === "error") {
+        // Remove any remaining skeletons
+        skeletons.forEach(s => { if (s.parentNode) s.remove(); });
+        if (j.error && skIdx === 0) {
+          fsStatus.textContent = "Error: " + j.error;
+          fsStatus.className = "fs-status err";
+        } else {
+          fsStatus.textContent = `Done — ${j.done} sprite${j.done !== 1 ? "s" : ""} generated.`;
+        }
+        fsGenBtn.disabled = false;
+        break;
+      }
+    }
+  });
 })();

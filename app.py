@@ -10,8 +10,12 @@ Endpoints:
 - GET  /api/jobs/{job_id}/download → download zip when ready
 """
 
+import base64
+import http.client
 import io
+import json
 import os
+import random
 import re
 import secrets
 import threading
@@ -269,6 +273,7 @@ async def start_words_job(
 
 
 # ----- HSK browser (MongoDB) -----
+
 
 class WordEditBody(BaseModel):
     pinyin: str | None = None
@@ -539,3 +544,424 @@ async def start_exam_job(
 
     threading.Thread(target=worker, daemon=True).start()
     return JSONResponse({"job_id": job.id})
+
+
+# ============================================================
+# Fish Studio — sprite generation via PixelLab
+# ============================================================
+
+try:
+    from PIL import Image as _PILImage
+    _PIL_OK = True
+except ImportError:
+    _PIL_OK = False
+
+PIXELLAB_SECRET = os.getenv("PIXELLAB_SECRET", "")
+SPRITES_DIR = APP_DIR / "sprites"
+SPRITES_DIR.mkdir(exist_ok=True)
+
+_FS_FRAME  = 256
+_FS_FRAMES = 8
+_FS_GENS   = 3
+_FS_ACTION = (
+    "the fish swims forward, side view, tail and fins gently undulating, "
+    "eyes not moving. no color change. the body color stays exactly the same. "
+    "no blink. no shadow."
+)
+
+
+def _pl_headers() -> dict:
+    return {"Content-Type": "application/json",
+            "Authorization": f"Bearer {PIXELLAB_SECRET}"}
+
+
+def _pl_poll(job_id: str) -> dict:
+    deadline = time.time() + 360
+    while time.time() < deadline:
+        conn = http.client.HTTPSConnection("api.pixellab.ai")
+        conn.request("GET", f"/v2/background-jobs/{job_id}", headers=_pl_headers())
+        res = conn.getresponse(); body = res.read(); conn.close()
+        if res.status != 200:
+            raise RuntimeError(f"poll {res.status}: {body.decode()[:200]}")
+        pl = json.loads(body)
+        st = pl.get("status")
+        if st == "completed":
+            return pl.get("last_response") or pl
+        if st in ("failed", "error", "cancelled"):
+            raise RuntimeError(f"PixelLab job {job_id} {st}")
+        time.sleep(3)
+    raise RuntimeError("PixelLab job timed out")
+
+
+def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
+    if not _PIL_OK:
+        raise RuntimeError("Pillow not installed — pip install Pillow")
+
+    img = _PILImage.open(io.BytesIO(ref_png)).convert("RGBA")
+    if img.size != (_FS_FRAME, _FS_FRAME):
+        img = img.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
+    buf = io.BytesIO(); img.save(buf, format="PNG")
+    ref_b64 = {"type": "base64",
+                "base64": f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}",
+                "format": "png"}
+
+    payload = json.dumps({
+        "first_frame":   ref_b64,
+        "last_frame":    ref_b64,
+        "action":        _FS_ACTION,
+        "frame_count":   _FS_FRAMES,
+        "no_background": True,
+        "seed":          random.randint(1, 2 ** 31 - 1),
+    })
+    conn = http.client.HTTPSConnection("api.pixellab.ai")
+    conn.request("POST", "/v2/animate-with-text-v3", payload, _pl_headers())
+    res = conn.getresponse(); body = res.read(); conn.close()
+    if res.status not in (200, 202):
+        raise RuntimeError(f"PixelLab {res.status}: {body.decode()[:200]}")
+
+    start = json.loads(body)
+    job_id = start.get("background_job_id")
+    if not job_id:
+        raise RuntimeError(f"no background_job_id — keys: {list(start.keys())}")
+
+    data = _pl_poll(job_id)
+    items = (data.get("images") or data.get("frames") or
+             (data.get("data") if isinstance(data.get("data"), list) else None))
+    if not items:
+        raise RuntimeError(f"unexpected API shape: {list(data.keys())}")
+
+    frames = []
+    for item in items:
+        raw = item if isinstance(item, str) else (
+            item.get("base64") or item.get("image") or item.get("b64_json") or "")
+        if raw.startswith("data:"):
+            raw = raw.split(",", 1)[1]
+        f = _PILImage.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
+        if f.size != (_FS_FRAME, _FS_FRAME):
+            f = f.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
+        frames.append(f)
+
+    ref_pal = img.convert("RGB").quantize(colors=256, method=_PILImage.Quantize.MEDIANCUT)
+    locked = []
+    for f in frames:
+        r, g, b, a = f.split()
+        snapped = _PILImage.merge("RGB", (r, g, b)) \
+                            .quantize(palette=ref_pal, dither=_PILImage.Dither.NONE) \
+                            .convert("RGB").convert("RGBA")
+        snapped.putalpha(a)
+        locked.append(snapped)
+
+    n = len(locked)
+    sheet = _PILImage.new("RGBA", (n * _FS_FRAME, _FS_FRAME), (0, 0, 0, 0))
+    for i, f in enumerate(locked):
+        sheet.paste(f, (i * _FS_FRAME, 0))
+    out = io.BytesIO(); sheet.save(out, format="PNG")
+    return out.getvalue(), n
+
+
+@dataclass
+class _SpriteJob:
+    id: str
+    total: int = _FS_GENS
+    done: int = 0
+    status: str = "pending"
+    error: str | None = None
+    completed: list = field(default_factory=list)
+    started_at: float = field(default_factory=time.time)
+
+
+_SJOBS: dict[str, _SpriteJob] = {}
+_SJOBS_LOCK = threading.Lock()
+
+
+@app.get("/api/sprite/list")
+async def sprite_list(request: Request) -> JSONResponse:
+    _require_auth(request)
+    sprites = []
+    for p in sorted(SPRITES_DIR.glob("*/meta.json"),
+                    key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            sprites.append(json.loads(p.read_text()))
+        except Exception:
+            pass
+    return JSONResponse({"sprites": sprites})
+
+
+@app.get("/api/sprite/jobs/{job_id}")
+async def sprite_job_status(job_id: str, request: Request) -> JSONResponse:
+    _require_auth(request)
+    with _SJOBS_LOCK:
+        sj = _SJOBS.get(job_id)
+    if not sj:
+        raise HTTPException(404, "job not found")
+    return JSONResponse({"status": sj.status, "done": sj.done,
+                         "total": sj.total, "completed": sj.completed,
+                         "error": sj.error})
+
+
+@app.post("/api/sprite/generate")
+async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+    _require_auth(request)
+    if not PIXELLAB_SECRET:
+        raise HTTPException(400, "PIXELLAB_SECRET not configured on server")
+    ref_bytes = await file.read()
+    fname = file.filename or "fish.png"
+
+    sj = _SpriteJob(id=uuid.uuid4().hex)
+    with _SJOBS_LOCK:
+        _SJOBS[sj.id] = sj
+
+    def worker() -> None:
+        sj.status = "running"
+        for _ in range(_FS_GENS):
+            try:
+                sheet_bytes, n_frames = _generate_one(ref_bytes)
+                sid = uuid.uuid4().hex
+                d = SPRITES_DIR / sid
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "sheet.png").write_bytes(sheet_bytes)
+                meta = {"id": sid, "name": fname, "cols": n_frames,
+                        "rows": 1, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                        "created_at": time.time()}
+                (d / "meta.json").write_text(json.dumps(meta))
+                sj.completed.append(meta)
+            except Exception as e:
+                sj.error = str(e)
+            finally:
+                sj.done += 1
+        sj.status = "done"
+
+    threading.Thread(target=worker, daemon=True).start()
+    return JSONResponse({"job_id": sj.id})
+
+
+@app.get("/api/sprite/{sprite_id}/image")
+async def sprite_image(sprite_id: str, request: Request) -> Response:
+    _require_auth(request)
+    p = SPRITES_DIR / sprite_id / "sheet.png"
+    if not p.exists():
+        raise HTTPException(404, "sprite not found")
+    return Response(content=p.read_bytes(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/api/sprite/{sprite_id}")
+async def sprite_delete(sprite_id: str, request: Request) -> JSONResponse:
+    _require_auth(request)
+    d = SPRITES_DIR / sprite_id
+    if not d.exists():
+        raise HTTPException(404, "sprite not found")
+    for f in d.iterdir():
+        f.unlink()
+    d.rmdir()
+    return JSONResponse({"ok": True})
+
+
+
+# ============================================================
+# Fish Studio -- sprite generation via PixelLab
+# ============================================================
+
+try:
+    from PIL import Image as _PILImage
+    _PIL_OK = True
+except ImportError:
+    _PIL_OK = False
+
+PIXELLAB_SECRET = os.getenv("PIXELLAB_SECRET", "")
+SPRITES_DIR = APP_DIR / "sprites"
+SPRITES_DIR.mkdir(exist_ok=True)
+
+_FS_FRAME  = 256
+_FS_FRAMES = 8
+_FS_GENS   = 3
+_FS_ACTION = (
+    "the fish swims forward, side view, tail and fins gently undulating, "
+    "eyes not moving. no color change. the body color stays exactly the same. "
+    "no blink. no shadow."
+)
+
+
+def _pl_headers() -> dict:
+    return {"Content-Type": "application/json",
+            "Authorization": f"Bearer {PIXELLAB_SECRET}"}
+
+
+def _pl_poll(job_id: str) -> dict:
+    deadline = time.time() + 360
+    while time.time() < deadline:
+        conn = http.client.HTTPSConnection("api.pixellab.ai")
+        conn.request("GET", f"/v2/background-jobs/{job_id}", headers=_pl_headers())
+        res = conn.getresponse(); body = res.read(); conn.close()
+        if res.status != 200:
+            raise RuntimeError(f"poll {res.status}: {body.decode()[:200]}")
+        pl = json.loads(body)
+        st = pl.get("status")
+        if st == "completed":
+            return pl.get("last_response") or pl
+        if st in ("failed", "error", "cancelled"):
+            raise RuntimeError(f"PixelLab job {job_id} {st}")
+        time.sleep(3)
+    raise RuntimeError("PixelLab job timed out")
+
+
+def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
+    if not _PIL_OK:
+        raise RuntimeError("Pillow not installed -- pip install Pillow")
+
+    img = _PILImage.open(io.BytesIO(ref_png)).convert("RGBA")
+    if img.size != (_FS_FRAME, _FS_FRAME):
+        img = img.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
+    buf = io.BytesIO(); img.save(buf, format="PNG")
+    ref_b64 = {"type": "base64",
+                "base64": f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}",
+                "format": "png"}
+
+    payload = json.dumps({
+        "first_frame":   ref_b64,
+        "last_frame":    ref_b64,
+        "action":        _FS_ACTION,
+        "frame_count":   _FS_FRAMES,
+        "no_background": True,
+        "seed":          random.randint(1, 2 ** 31 - 1),
+    })
+    conn = http.client.HTTPSConnection("api.pixellab.ai")
+    conn.request("POST", "/v2/animate-with-text-v3", payload, _pl_headers())
+    res = conn.getresponse(); body = res.read(); conn.close()
+    if res.status not in (200, 202):
+        raise RuntimeError(f"PixelLab {res.status}: {body.decode()[:200]}")
+
+    start = json.loads(body)
+    job_id = start.get("background_job_id")
+    if not job_id:
+        raise RuntimeError(f"no background_job_id -- keys: {list(start.keys())}")
+
+    data = _pl_poll(job_id)
+    items = (data.get("images") or data.get("frames") or
+             (data.get("data") if isinstance(data.get("data"), list) else None))
+    if not items:
+        raise RuntimeError(f"unexpected API shape: {list(data.keys())}")
+
+    frames = []
+    for item in items:
+        raw = item if isinstance(item, str) else (
+            item.get("base64") or item.get("image") or item.get("b64_json") or "")
+        if raw.startswith("data:"):
+            raw = raw.split(",", 1)[1]
+        f = _PILImage.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
+        if f.size != (_FS_FRAME, _FS_FRAME):
+            f = f.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
+        frames.append(f)
+
+    ref_pal = img.convert("RGB").quantize(colors=256, method=_PILImage.Quantize.MEDIANCUT)
+    locked = []
+    for f in frames:
+        r, g, b, a = f.split()
+        snapped = _PILImage.merge("RGB", (r, g, b))                             .quantize(palette=ref_pal, dither=_PILImage.Dither.NONE)                             .convert("RGB").convert("RGBA")
+        snapped.putalpha(a)
+        locked.append(snapped)
+
+    n = len(locked)
+    sheet = _PILImage.new("RGBA", (n * _FS_FRAME, _FS_FRAME), (0, 0, 0, 0))
+    for i, f in enumerate(locked):
+        sheet.paste(f, (i * _FS_FRAME, 0))
+    out = io.BytesIO(); sheet.save(out, format="PNG")
+    return out.getvalue(), n
+
+
+@dataclass
+class _SpriteJob:
+    id: str
+    total: int = _FS_GENS
+    done: int = 0
+    status: str = "pending"
+    error: str | None = None
+    completed: list = field(default_factory=list)
+    started_at: float = field(default_factory=time.time)
+
+
+_SJOBS: dict[str, _SpriteJob] = {}
+_SJOBS_LOCK = threading.Lock()
+
+
+@app.get("/api/sprite/list")
+async def sprite_list(request: Request) -> JSONResponse:
+    _require_auth(request)
+    sprites = []
+    for p in sorted(SPRITES_DIR.glob("*/meta.json"),
+                    key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            sprites.append(json.loads(p.read_text()))
+        except Exception:
+            pass
+    return JSONResponse({"sprites": sprites})
+
+
+@app.get("/api/sprite/jobs/{job_id}")
+async def sprite_job_status(job_id: str, request: Request) -> JSONResponse:
+    _require_auth(request)
+    with _SJOBS_LOCK:
+        sj = _SJOBS.get(job_id)
+    if not sj:
+        raise HTTPException(404, "job not found")
+    return JSONResponse({"status": sj.status, "done": sj.done,
+                         "total": sj.total, "completed": sj.completed,
+                         "error": sj.error})
+
+
+@app.post("/api/sprite/generate")
+async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+    _require_auth(request)
+    if not PIXELLAB_SECRET:
+        raise HTTPException(400, "PIXELLAB_SECRET not configured on server")
+    ref_bytes = await file.read()
+    fname = file.filename or "fish.png"
+
+    sj = _SpriteJob(id=uuid.uuid4().hex)
+    with _SJOBS_LOCK:
+        _SJOBS[sj.id] = sj
+
+    def worker() -> None:
+        sj.status = "running"
+        for _ in range(_FS_GENS):
+            try:
+                sheet_bytes, n_frames = _generate_one(ref_bytes)
+                sid = uuid.uuid4().hex
+                d = SPRITES_DIR / sid
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "sheet.png").write_bytes(sheet_bytes)
+                meta = {"id": sid, "name": fname, "cols": n_frames,
+                        "rows": 1, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                        "created_at": time.time()}
+                (d / "meta.json").write_text(json.dumps(meta))
+                sj.completed.append(meta)
+            except Exception as e:
+                sj.error = str(e)
+            finally:
+                sj.done += 1
+        sj.status = "done"
+
+    threading.Thread(target=worker, daemon=True).start()
+    return JSONResponse({"job_id": sj.id})
+
+
+@app.get("/api/sprite/{sprite_id}/image")
+async def sprite_image(sprite_id: str, request: Request) -> Response:
+    _require_auth(request)
+    p = SPRITES_DIR / sprite_id / "sheet.png"
+    if not p.exists():
+        raise HTTPException(404, "sprite not found")
+    return Response(content=p.read_bytes(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/api/sprite/{sprite_id}")
+async def sprite_delete(sprite_id: str, request: Request) -> JSONResponse:
+    _require_auth(request)
+    d = SPRITES_DIR / sprite_id
+    if not d.exists():
+        raise HTTPException(404, "sprite not found")
+    for f in d.iterdir():
+        f.unlink()
+    d.rmdir()
+    return JSONResponse({"ok": True})
