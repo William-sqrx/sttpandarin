@@ -562,7 +562,6 @@ SPRITES_DIR.mkdir(exist_ok=True)
 
 _FS_FRAME  = 256
 _FS_FRAMES = 8
-_FS_CONT   = 7
 _FS_GENS   = 3
 _FS_ACTION = (
     "the fish gently swims in place, side view. "
@@ -652,17 +651,14 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
             raw_frames.append(f)
         return [_lock(f) for f in raw_frames]
 
-    # Call 1: 8 animation frames from the reference
-    locked1 = _call_pl(img)
-    # Call 2: 3 continuation frames starting from the last frame of call 1
-    locked2 = _call_pl(locked1[-1])[:_FS_CONT]
+    locked = _call_pl(img)
 
-    # ref frame + 8 + 7 = 16 frames in a 4×4 grid = 1024×1024 (clean 256px cells)
-    all_frames = [img] + locked1 + locked2
+    # ref frame + 8 animation frames = 9 frames in a single row (2304×256)
+    all_frames = [img] + locked
     n = len(all_frames)
-    sheet = _PILImage.new("RGBA", (4 * _FS_FRAME, 4 * _FS_FRAME), (0, 0, 0, 0))
+    sheet = _PILImage.new("RGBA", (n * _FS_FRAME, _FS_FRAME), (0, 0, 0, 0))
     for i, f in enumerate(all_frames):
-        sheet.paste(f, ((i % 4) * _FS_FRAME, (i // 4) * _FS_FRAME))
+        sheet.paste(f, (i * _FS_FRAME, 0))
     out = io.BytesIO(); sheet.save(out, format="PNG")
     return out.getvalue(), n
 
@@ -728,8 +724,8 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
                 d = SPRITES_DIR / sid
                 d.mkdir(parents=True, exist_ok=True)
                 (d / "sheet.png").write_bytes(sheet_bytes)
-                meta = {"id": sid, "name": fname, "cols": 4,
-                        "rows": 4, "total": n_frames, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                meta = {"id": sid, "name": fname, "cols": n_frames,
+                        "rows": 1, "total": n_frames, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
                         "created_at": time.time()}
                 (d / "meta.json").write_text(json.dumps(meta))
                 sj.completed.append(meta)
@@ -744,23 +740,12 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
 
 
 @app.get("/api/sprite/{sprite_id}/image")
-async def sprite_image(sprite_id: str, request: Request,
-                       size: int | None = None) -> Response:
+async def sprite_image(sprite_id: str, request: Request) -> Response:
     _require_auth(request)
     p = SPRITES_DIR / sprite_id / "sheet.png"
     if not p.exists():
         raise HTTPException(404, "sprite not found")
-    if size and _PIL_OK:
-        img = _PILImage.open(p)
-        w, h = img.size
-        sq = max(w, h, size)
-        padded = _PILImage.new("RGBA", (sq, sq), (0, 0, 0, 0))
-        padded.paste(img, (0, 0))
-        buf = io.BytesIO(); padded.save(buf, format="PNG")
-        data = buf.getvalue()
-    else:
-        data = p.read_bytes()
-    return Response(content=data, media_type="image/png",
+    return Response(content=p.read_bytes(), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
 
 
@@ -793,7 +778,6 @@ SPRITES_DIR.mkdir(exist_ok=True)
 
 _FS_FRAME  = 256
 _FS_FRAMES = 8
-_FS_CONT   = 7
 _FS_GENS   = 3
 _FS_ACTION = (
     "the fish gently swims in place, side view. "
@@ -883,14 +867,13 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
             raw_frames.append(f)
         return [_lock(f) for f in raw_frames]
 
-    # ref frame + 8 + 7 = 16 frames in a 4×4 grid = 1024×1024
-    locked1 = _call_pl(img)
-    locked2 = _call_pl(img)[:_FS_CONT]
-    all_frames = [img] + locked1 + locked2
+    # ref frame + 8 animation frames = 9 frames in a single row (2304×256)
+    locked = _call_pl(img)
+    all_frames = [img] + locked
     n = len(all_frames)
-    sheet = _PILImage.new("RGBA", (4 * _FS_FRAME, 4 * _FS_FRAME), (0, 0, 0, 0))
+    sheet = _PILImage.new("RGBA", (n * _FS_FRAME, _FS_FRAME), (0, 0, 0, 0))
     for i, f in enumerate(all_frames):
-        sheet.paste(f, ((i % 4) * _FS_FRAME, (i // 4) * _FS_FRAME))
+        sheet.paste(f, (i * _FS_FRAME, 0))
     out = io.BytesIO(); sheet.save(out, format="PNG")
     return out.getvalue(), n
 
@@ -956,8 +939,8 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
                 d = SPRITES_DIR / sid
                 d.mkdir(parents=True, exist_ok=True)
                 (d / "sheet.png").write_bytes(sheet_bytes)
-                meta = {"id": sid, "name": fname, "cols": 4,
-                        "rows": 4, "total": n_frames, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                meta = {"id": sid, "name": fname, "cols": n_frames,
+                        "rows": 1, "total": n_frames, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
                         "created_at": time.time()}
                 (d / "meta.json").write_text(json.dumps(meta))
                 sj.completed.append(meta)
@@ -972,23 +955,12 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
 
 
 @app.get("/api/sprite/{sprite_id}/image")
-async def sprite_image(sprite_id: str, request: Request,
-                       size: int | None = None) -> Response:
+async def sprite_image(sprite_id: str, request: Request) -> Response:
     _require_auth(request)
     p = SPRITES_DIR / sprite_id / "sheet.png"
     if not p.exists():
         raise HTTPException(404, "sprite not found")
-    if size and _PIL_OK:
-        img = _PILImage.open(p)
-        w, h = img.size
-        sq = max(w, h, size)
-        padded = _PILImage.new("RGBA", (sq, sq), (0, 0, 0, 0))
-        padded.paste(img, (0, 0))
-        buf = io.BytesIO(); padded.save(buf, format="PNG")
-        data = buf.getvalue()
-    else:
-        data = p.read_bytes()
-    return Response(content=data, media_type="image/png",
+    return Response(content=p.read_bytes(), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
 
 

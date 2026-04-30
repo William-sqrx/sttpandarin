@@ -638,10 +638,10 @@
     requestAnimationFrame(draw);
   }
 
-  // Download selected sprite sheet (1024×1024 for OpenAI compatibility)
+  // Download selected sprite sheet
   document.getElementById("fs-dl-btn").addEventListener("click", async () => {
     if (!fsSelectedId) return;
-    const url = "/api/sprite/" + fsSelectedId + "/image?size=1024&t=" + Date.now();
+    const url = "/api/sprite/" + fsSelectedId + "/image?t=" + Date.now();
     const a = document.createElement("a");
     a.href = url;
     a.download = "sprite_" + fsSelectedId + ".png";
