@@ -625,22 +625,23 @@
       if (ts - last < interval) return;
       last = ts;
 
-      const cols = meta.cols, rows = meta.rows;
-      const col  = frame % cols;
-      const row  = Math.floor(frame / cols);
-      const sw   = img.naturalWidth  / cols;
-      const sh   = img.naturalHeight / rows;
+      const cols  = meta.cols, rows = meta.rows;
+      const total = meta.total || (cols * rows);
+      const col   = frame % cols;
+      const row   = Math.floor(frame / cols);
+      const sw    = img.naturalWidth  / cols;
+      const sh    = img.naturalHeight / rows;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, col * sw, row * sh, sw, sh, 0, 0, canvas.width, canvas.height);
-      frame = (frame + 1) % (cols * rows);
+      frame = (frame + 1) % total;
     }
     requestAnimationFrame(draw);
   }
 
-  // Download selected sprite sheet
+  // Download selected sprite sheet (1024×1024 for OpenAI compatibility)
   document.getElementById("fs-dl-btn").addEventListener("click", async () => {
     if (!fsSelectedId) return;
-    const url = "/api/sprite/" + fsSelectedId + "/image?t=" + Date.now();
+    const url = "/api/sprite/" + fsSelectedId + "/image?size=1024&t=" + Date.now();
     const a = document.createElement("a");
     a.href = url;
     a.download = "sprite_" + fsSelectedId + ".png";
