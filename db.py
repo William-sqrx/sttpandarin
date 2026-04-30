@@ -175,6 +175,14 @@ def get_lesson_words(lesson_id: str) -> dict[str, Any]:
                 candidates = by_chinese.get(stripped, [])
                 if len(candidates) == 1:
                     match = candidates[0]
+        if not match:
+            # Pinyin-narrowed fallback: multiple chinese entries but only one
+            # matches the given pinyin (e.g. 系 jì vs 系 xì).
+            for base_ch in (ch, _strip_parens(ch)):
+                cands_py = [c for c in by_chinese.get(base_ch, []) if c.get("pinyin") == py]
+                if len(cands_py) == 1:
+                    match = cands_py[0]
+                    break
 
         if match:
             out_words.append({

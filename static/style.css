@@ -106,6 +106,9 @@ button.link:hover { color: var(--text); background: transparent; }
 
 #fs-gen-btn { white-space: nowrap; margin: 0; }
 #fs-gen-btn:disabled { opacity: .45; cursor: not-allowed; }
+#fs-dl-btn { white-space: nowrap; margin: 0; background: #eef0f5; color: var(--text); }
+#fs-dl-btn:hover:not(:disabled) { background: #dfe3eb; }
+#fs-dl-btn:disabled { opacity: .45; cursor: not-allowed; }
 
 .fs-status { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 18px; }
 .fs-status.err { color: var(--err); }

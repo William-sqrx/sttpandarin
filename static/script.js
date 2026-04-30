@@ -508,6 +508,12 @@
   let fsLoaded = false;
   let fsSelectedId = null;
 
+  function fsSetSelected(id) {
+    fsSelectedId = id;
+    const dlBtn = document.getElementById("fs-dl-btn");
+    if (dlBtn) dlBtn.disabled = !id;
+  }
+
   function fsInit() {
     if (fsLoaded) return;
     fsLoaded = true;
@@ -570,11 +576,11 @@
       const id = wrap.dataset.id;
       if (fsSelectedId === id) {
         wrap.classList.remove("selected");
-        fsSelectedId = null;
+        fsSetSelected(null);
       } else {
         document.querySelectorAll(".fs-fish-wrap.selected").forEach(w => w.classList.remove("selected"));
         wrap.classList.add("selected");
-        fsSelectedId = id;
+        fsSetSelected(id);
       }
     });
 
@@ -584,7 +590,7 @@
       try {
         await fetch("/api/sprite/" + meta.id, { method: "DELETE" });
         wrap.remove();
-        if (fsSelectedId === meta.id) fsSelectedId = null;
+        if (fsSelectedId === meta.id) fsSetSelected(null);
       } catch (err) {
         delBtn.disabled = false;
       }
@@ -592,9 +598,9 @@
 
     // Deselect on outside click
     document.addEventListener("click", (e) => {
-      if (!e.target.closest(".fs-fish-wrap")) {
+      if (!e.target.closest(".fs-fish-wrap") && !e.target.closest("#fs-dl-btn")) {
         document.querySelectorAll(".fs-fish-wrap.selected").forEach(w => w.classList.remove("selected"));
-        fsSelectedId = null;
+        fsSetSelected(null);
       }
     }, { capture: false });
 
@@ -630,6 +636,18 @@
     }
     requestAnimationFrame(draw);
   }
+
+  // Download selected sprite sheet
+  document.getElementById("fs-dl-btn").addEventListener("click", async () => {
+    if (!fsSelectedId) return;
+    const url = "/api/sprite/" + fsSelectedId + "/image?t=" + Date.now();
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "sprite_" + fsSelectedId + ".png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
 
   // Upload + generate
   const fsDropZone  = document.getElementById("fs-drop-zone");
