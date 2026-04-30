@@ -836,61 +836,61 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
     img = _PILImage.open(io.BytesIO(ref_png)).convert("RGBA")
     if img.size != (_FS_FRAME, _FS_FRAME):
         img = img.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
-    buf = io.BytesIO(); img.save(buf, format="PNG")
-    ref_b64 = {"type": "base64",
-                "base64": f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}",
-                "format": "png"}
-
-    payload = json.dumps({
-        "first_frame":   ref_b64,
-        "last_frame":    ref_b64,
-        "action":        _FS_ACTION,
-        "frame_count":   _FS_FRAMES,
-        "no_background": True,
-        "seed":          random.randint(1, 2 ** 31 - 1),
-    })
-    conn = http.client.HTTPSConnection("api.pixellab.ai")
-    conn.request("POST", "/v2/animate-with-text-v3", payload, _pl_headers())
-    res = conn.getresponse(); body = res.read(); conn.close()
-    if res.status not in (200, 202):
-        raise RuntimeError(f"PixelLab {res.status}: {body.decode()[:200]}")
-
-    start = json.loads(body)
-    job_id = start.get("background_job_id")
-    if not job_id:
-        raise RuntimeError(f"no background_job_id -- keys: {list(start.keys())}")
-
-    data = _pl_poll(job_id)
-    items = (data.get("images") or data.get("frames") or
-             (data.get("data") if isinstance(data.get("data"), list) else None))
-    if not items:
-        raise RuntimeError(f"unexpected API shape: {list(data.keys())}")
-
-    frames = []
-    for item in items:
-        raw = item if isinstance(item, str) else (
-            item.get("base64") or item.get("image") or item.get("b64_json") or "")
-        if raw.startswith("data:"):
-            raw = raw.split(",", 1)[1]
-        f = _PILImage.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
-        if f.size != (_FS_FRAME, _FS_FRAME):
-            f = f.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
-        frames.append(f)
 
     ref_pal = img.convert("RGB").quantize(colors=256, method=_PILImage.Quantize.MEDIANCUT)
-    locked = []
-    for f in frames:
-        r, g, b, a = f.split()
-        snapped = _PILImage.merge("RGB", (r, g, b))                             .quantize(palette=ref_pal, dither=_PILImage.Dither.NONE)                             .convert("RGB").convert("RGBA")
-        snapped.putalpha(a)
-        locked.append(snapped)
 
-    n = len(locked)
-    _FS_COLS = 3
-    _FS_ROWS = (n + _FS_COLS - 1) // _FS_COLS
-    sheet = _PILImage.new("RGBA", (_FS_COLS * _FS_FRAME, _FS_ROWS * _FS_FRAME), (0, 0, 0, 0))
-    for i, f in enumerate(locked):
-        sheet.paste(f, ((i % _FS_COLS) * _FS_FRAME, (i // _FS_COLS) * _FS_FRAME))
+    def _lock(f):
+        r, g, b, a = f.split()
+        snapped = (_PILImage.merge("RGB", (r, g, b))
+                             .quantize(palette=ref_pal, dither=_PILImage.Dither.NONE)
+                             .convert("RGB").convert("RGBA"))
+        snapped.putalpha(a)
+        return snapped
+
+    def _call_pl(start_img):
+        buf = io.BytesIO(); start_img.save(buf, format="PNG")
+        b64 = {"type": "base64",
+               "base64": f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}",
+               "format": "png"}
+        payload = json.dumps({
+            "first_frame": b64, "last_frame": b64,
+            "action": _FS_ACTION, "frame_count": _FS_FRAMES,
+            "no_background": True, "seed": random.randint(1, 2 ** 31 - 1),
+        })
+        conn = http.client.HTTPSConnection("api.pixellab.ai")
+        conn.request("POST", "/v2/animate-with-text-v3", payload, _pl_headers())
+        res = conn.getresponse(); body = res.read(); conn.close()
+        if res.status not in (200, 202):
+            raise RuntimeError(f"PixelLab {res.status}: {body.decode()[:200]}")
+        start = json.loads(body)
+        job_id = start.get("background_job_id")
+        if not job_id:
+            raise RuntimeError(f"no background_job_id -- keys: {list(start.keys())}")
+        data = _pl_poll(job_id)
+        items = (data.get("images") or data.get("frames") or
+                 (data.get("data") if isinstance(data.get("data"), list) else None))
+        if not items:
+            raise RuntimeError(f"unexpected API shape: {list(data.keys())}")
+        raw_frames = []
+        for item in items:
+            raw = item if isinstance(item, str) else (
+                item.get("base64") or item.get("image") or item.get("b64_json") or "")
+            if raw.startswith("data:"):
+                raw = raw.split(",", 1)[1]
+            f = _PILImage.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
+            if f.size != (_FS_FRAME, _FS_FRAME):
+                f = f.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
+            raw_frames.append(f)
+        return [_lock(f) for f in raw_frames]
+
+    # ref frame + 8 + 7 = 16 frames in a 4×4 grid = 1024×1024
+    locked1 = _call_pl(img)
+    locked2 = _call_pl(locked1[-1])[:_FS_CONT]
+    all_frames = [img] + locked1 + locked2
+    n = len(all_frames)
+    sheet = _PILImage.new("RGBA", (4 * _FS_FRAME, 4 * _FS_FRAME), (0, 0, 0, 0))
+    for i, f in enumerate(all_frames):
+        sheet.paste(f, ((i % 4) * _FS_FRAME, (i // 4) * _FS_FRAME))
     out = io.BytesIO(); sheet.save(out, format="PNG")
     return out.getvalue(), n
 
