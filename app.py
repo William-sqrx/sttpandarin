@@ -564,9 +564,13 @@ _FS_FRAME  = 256
 _FS_FRAMES = 8
 _FS_GENS   = 3
 _FS_ACTION = (
-    "the fish swims forward, side view, eyes not moving. no color change. "
-    "no color change. 0 color change. the body color stays exactly the same. "
-    "body color stays exactly the same. no blink. no shadown."
+    "the fish gently swims in place, side view. "
+    "keep every body part exactly as in the reference: same fins, same eyes, same tail, same shape. "
+    "do not add any new body parts. do not add fins. do not add bubbles. do not add anything. "
+    "no new elements. no bubbles. no extra fins. no extra features. "
+    "only the body gently undulates as if swimming. "
+    "no color change. 0 color change. body color stays exactly the same. "
+    "no blink. no shadow."
 )
 
 
@@ -776,9 +780,13 @@ _FS_FRAME  = 256
 _FS_FRAMES = 8
 _FS_GENS   = 3
 _FS_ACTION = (
-    "the fish swims forward, side view, eyes not moving. no color change. "
-    "no color change. 0 color change. the body color stays exactly the same. "
-    "body color stays exactly the same. no blink. no shadown."
+    "the fish gently swims in place, side view. "
+    "keep every body part exactly as in the reference: same fins, same eyes, same tail, same shape. "
+    "do not add any new body parts. do not add fins. do not add bubbles. do not add anything. "
+    "no new elements. no bubbles. no extra fins. no extra features. "
+    "only the body gently undulates as if swimming. "
+    "no color change. 0 color change. body color stays exactly the same. "
+    "no blink. no shadow."
 )
 
 
