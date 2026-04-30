@@ -656,9 +656,11 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
         locked.append(snapped)
 
     n = len(locked)
-    sheet = _PILImage.new("RGBA", (n * _FS_FRAME, _FS_FRAME), (0, 0, 0, 0))
+    _FS_COLS = 3
+    _FS_ROWS = (n + _FS_COLS - 1) // _FS_COLS
+    sheet = _PILImage.new("RGBA", (_FS_COLS * _FS_FRAME, _FS_ROWS * _FS_FRAME), (0, 0, 0, 0))
     for i, f in enumerate(locked):
-        sheet.paste(f, (i * _FS_FRAME, 0))
+        sheet.paste(f, ((i % _FS_COLS) * _FS_FRAME, (i // _FS_COLS) * _FS_FRAME))
     out = io.BytesIO(); sheet.save(out, format="PNG")
     return out.getvalue(), n
 
@@ -724,8 +726,9 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
                 d = SPRITES_DIR / sid
                 d.mkdir(parents=True, exist_ok=True)
                 (d / "sheet.png").write_bytes(sheet_bytes)
-                meta = {"id": sid, "name": fname, "cols": n_frames,
-                        "rows": 1, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                _mc = min(n_frames, 3); _mr = (n_frames + _mc - 1) // _mc
+                meta = {"id": sid, "name": fname, "cols": _mc,
+                        "rows": _mr, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
                         "created_at": time.time()}
                 (d / "meta.json").write_text(json.dumps(meta))
                 sj.completed.append(meta)
@@ -870,9 +873,11 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
         locked.append(snapped)
 
     n = len(locked)
-    sheet = _PILImage.new("RGBA", (n * _FS_FRAME, _FS_FRAME), (0, 0, 0, 0))
+    _FS_COLS = 3
+    _FS_ROWS = (n + _FS_COLS - 1) // _FS_COLS
+    sheet = _PILImage.new("RGBA", (_FS_COLS * _FS_FRAME, _FS_ROWS * _FS_FRAME), (0, 0, 0, 0))
     for i, f in enumerate(locked):
-        sheet.paste(f, (i * _FS_FRAME, 0))
+        sheet.paste(f, ((i % _FS_COLS) * _FS_FRAME, (i // _FS_COLS) * _FS_FRAME))
     out = io.BytesIO(); sheet.save(out, format="PNG")
     return out.getvalue(), n
 
@@ -938,8 +943,9 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
                 d = SPRITES_DIR / sid
                 d.mkdir(parents=True, exist_ok=True)
                 (d / "sheet.png").write_bytes(sheet_bytes)
-                meta = {"id": sid, "name": fname, "cols": n_frames,
-                        "rows": 1, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                _mc = min(n_frames, 3); _mr = (n_frames + _mc - 1) // _mc
+                meta = {"id": sid, "name": fname, "cols": _mc,
+                        "rows": _mr, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
                         "created_at": time.time()}
                 (d / "meta.json").write_text(json.dumps(meta))
                 sj.completed.append(meta)
