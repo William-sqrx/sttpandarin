@@ -564,9 +564,9 @@ _FS_FRAME  = 256
 _FS_FRAMES = 8
 _FS_GENS   = 3
 _FS_ACTION = (
-    "the fish swims forward, side view, tail and fins gently undulating, "
-    "eyes not moving. no color change. the body color stays exactly the same. "
-    "no blink. no shadow."
+    "the fish swims forward, side view, eyes not moving. no color change. "
+    "no color change. 0 color change. the body color stays exactly the same. "
+    "body color stays exactly the same. no blink. no shadown."
 )
 
 
@@ -776,9 +776,9 @@ _FS_FRAME  = 256
 _FS_FRAMES = 8
 _FS_GENS   = 3
 _FS_ACTION = (
-    "the fish swims forward, side view, tail and fins gently undulating, "
-    "eyes not moving. no color change. the body color stays exactly the same. "
-    "no blink. no shadow."
+    "the fish swims forward, side view, eyes not moving. no color change. "
+    "no color change. 0 color change. the body color stays exactly the same. "
+    "body color stays exactly the same. no blink. no shadown."
 )
 
 

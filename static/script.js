@@ -319,6 +319,185 @@
     return row;
   }
 
+  // ===== Fish Studio — pixel-art ocean canvas =====
+  const _SKY_RATIO    = 0.33;
+  const _SAND_H_RATIO = 0.2;
+  const _SEA_PX       = 2;
+  const _SEA_BAND     = 24;
+  const _SEA_FLAT_TOP = -6;
+  const _BAYER = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+  const _CAUSTIC_DEFS = [
+    { xRatio:0.12, width:28, opacity:0.18, speed:0.00045, drift:28, phase:0.0  },
+    { xRatio:0.28, width:18, opacity:0.14, speed:0.00032, drift:20, phase:1.2  },
+    { xRatio:0.45, width:35, opacity:0.22, speed:0.00038, drift:24, phase:2.5  },
+    { xRatio:0.62, width:20, opacity:0.16, speed:0.0005,  drift:18, phase:0.7  },
+    { xRatio:0.80, width:26, opacity:0.19, speed:0.00028, drift:22, phase:3.8  },
+  ];
+  const _SKY_PAL = [
+    { hour:0,    top:"#050820", bot:"#1a1648" },
+    { hour:5,    top:"#120f38", bot:"#3a1e5c" },
+    { hour:6,    top:"#ff7b4a", bot:"#ffcc80" },
+    { hour:8,    top:"#5aa2d8", bot:"#cbe4f0" },
+    { hour:12,   top:"#3ba8e6", bot:"#ffe27a" },
+    { hour:15,   top:"#2a70c0", bot:"#9bc9de" },
+    { hour:17.5, top:"#e8803a", bot:"#f5c842" },
+    { hour:19,   top:"#6b2d6b", bot:"#c05050" },
+    { hour:20.5, top:"#0e1138", bot:"#2a2060" },
+    { hour:24,   top:"#050820", bot:"#1a1648" },
+  ];
+  const _TIME_PAL = [
+    { hour:0,    water:["#2e3a88","#202a72","#152058","#0d1d40","#0a2638","#04111e"], sand:["#6a4e20","#4e3812","#7a5e2e","#6a4c1c"] },
+    { hour:5,    water:["#3a2078","#342070","#2e1c68","#281858","#201448","#1a1038"], sand:["#7a5a28","#5a4018","#8a6a38","#7a5820"] },
+    { hour:6.5,  water:["#e08868","#cc7858","#b86848","#a45838","#905028","#7c4818"], sand:["#c8924a","#a07232","#daa45a","#c88e3a"] },
+    { hour:8,    water:["#b8ecdc","#78d4d0","#48b4c8","#2495c0","#1678ae","#0a5c8c"], sand:["#c8973a","#b07828","#e0b458","#d0a040"] },
+    { hour:12,   water:["#e4f6c0","#8ee0c4","#3cc2cc","#1a98c4","#0d70a8","#054c7e"], sand:["#d4a144","#b88230","#e8be64","#d8aa48"] },
+    { hour:15,   water:["#9ce6d4","#5fc0c8","#3a9abd","#1e76ae","#14588c","#0a3f6a"], sand:["#c8973a","#b07828","#e0b458","#d0a040"] },
+    { hour:17.5, water:["#e09060","#c87848","#b06050","#985060","#804870","#684060"], sand:["#cc9448","#a47030","#e0a85a","#cc9038"] },
+    { hour:19.5, water:["#5840a8","#4c3898","#403088","#342868","#282050","#1c1840"], sand:["#906840","#706028","#a07848","#906030"] },
+    { hour:21,   water:["#1e2a68","#19235a","#141c4c","#10173e","#0d1338","#0a1030"], sand:["#7a6030","#5a4820","#8a7040","#7a5828"] },
+    { hour:24,   water:["#2e3a88","#202a72","#152058","#0d1d40","#0a2638","#04111e"], sand:["#6a4e20","#4e3812","#7a5e2e","#6a4c1c"] },
+  ];
+
+  function _hr2rgb(hex) {
+    if (hex.startsWith("rgb")) { const m=hex.match(/(\d+),\s*(\d+),\s*(\d+)/); return [+m[1],+m[2],+m[3]]; }
+    const h=hex.replace("#","");
+    return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)];
+  }
+  function _lhex(a,b,t) {
+    const [r1,g1,b1]=_hr2rgb(a),[r2,g2,b2]=_hr2rgb(b);
+    return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+  }
+  function _lightenC(c,a) { const [r,g,b]=_hr2rgb(c); return `rgb(${Math.min(255,r+a)},${Math.min(255,g+a)},${Math.min(255,b+a)})`; }
+  function _darkenC(c,a)  { const [r,g,b]=_hr2rgb(c); return `rgb(${Math.max(0,r-a)},${Math.max(0,g-a)},${Math.max(0,b-a)})`; }
+
+  function _ocHour() { const n=new Date(); return n.getHours()+n.getMinutes()/60; }
+  function _ocSky(hour) {
+    let p=_SKY_PAL[0], n=_SKY_PAL[_SKY_PAL.length-1];
+    for(let i=0;i<_SKY_PAL.length-1;i++){if(hour>=_SKY_PAL[i].hour&&hour<_SKY_PAL[i+1].hour){p=_SKY_PAL[i];n=_SKY_PAL[i+1];break;}}
+    const range=n.hour-p.hour, t=range===0?0:(hour-p.hour)/range;
+    return { top:_lhex(p.top,n.top,t), bot:_lhex(p.bot,n.bot,t) };
+  }
+  function _ocTime(hour) {
+    let p=_TIME_PAL[0], n=_TIME_PAL[_TIME_PAL.length-1];
+    for(let i=0;i<_TIME_PAL.length-1;i++){if(hour>=_TIME_PAL[i].hour&&hour<_TIME_PAL[i+1].hour){p=_TIME_PAL[i];n=_TIME_PAL[i+1];break;}}
+    const range=n.hour-p.hour, t=range===0?0:(hour-p.hour)/range;
+    return { water:p.water.map((c,i)=>_lhex(c,n.water[i],t)), sand:p.sand.map((c,i)=>_lhex(c,n.sand[i],t)) };
+  }
+  function _buildPalette(water) {
+    const pal=[];
+    for(let i=0;i<_SEA_BAND;i++){
+      const t=i/(_SEA_BAND-1), segs=water.length-1;
+      const seg=Math.min(segs-1,Math.floor(t*segs)), lt=t*segs-seg;
+      const base=_lhex(water[seg],water[seg+1],lt);
+      pal.push(_lhex(base,"#001030",Math.min(0.35,t*0.4)));
+    }
+    return pal;
+  }
+  function _drawDither(ctx, W, seaH, pal, offY) {
+    const cols=Math.ceil(W/_SEA_PX), rows=Math.ceil(seaH/_SEA_PX);
+    for(let ry=0;ry<rows;ry++){
+      const y=ry*_SEA_PX;
+      const dt=Math.max(0,(y-_SEA_FLAT_TOP)/Math.max(1,seaH-_SEA_FLAT_TOP));
+      const bp=dt*(_SEA_BAND-1);
+      const bLo=Math.floor(bp), bHi=Math.min(_SEA_BAND-1,bLo+1), frac=bp-bLo;
+      const brow=_BAYER[ry&3];
+      const hi=[frac>(brow[0]+.5)/16, frac>(brow[1]+.5)/16, frac>(brow[2]+.5)/16, frac>(brow[3]+.5)/16];
+      const hc=hi.filter(Boolean).length;
+      if(hc===0){
+        ctx.fillStyle=pal[bLo]; ctx.fillRect(0,offY+y,W,_SEA_PX);
+      } else if(hc===4){
+        ctx.fillStyle=pal[bHi]; ctx.fillRect(0,offY+y,W,_SEA_PX);
+      } else {
+        ctx.fillStyle=pal[bLo]; ctx.fillRect(0,offY+y,W,_SEA_PX);
+        ctx.fillStyle=pal[bHi];
+        for(let c=0;c<4;c++){ if(!hi[c])continue; for(let cx=c;cx<cols;cx+=4) ctx.fillRect(cx*_SEA_PX,offY+y,_SEA_PX,_SEA_PX); }
+      }
+    }
+  }
+  function _drawSandLayer(ctx, W, seaH, sandY, offY, sand) {
+    ctx.fillStyle=sand[0]; ctx.fillRect(0,offY+sandY,W,seaH-sandY);
+    ctx.fillStyle=sand[1]; ctx.fillRect(0,offY+sandY+8,W,seaH-sandY-8);
+    ctx.fillStyle=sand[2]; ctx.fillRect(0,offY+sandY,W,3);
+    ctx.fillStyle=sand[3]; ctx.fillRect(0,offY+sandY+3,W,2);
+    const sandH=seaH-sandY;
+    ctx.strokeStyle=_lightenC(sand[0],10); ctx.lineWidth=1;
+    ctx.beginPath();
+    for(let r=0;r<4;r++){
+      const ry=offY+sandY+14+r*(sandH/5);
+      ctx.moveTo(0,ry);
+      for(let x=8;x<=W;x+=8) ctx.lineTo(x,ry+Math.sin(x*0.04+r*1.5)*1.5);
+    }
+    ctx.stroke();
+    for(let i=0;i<50;i++){
+      const h1=((i*374761393+7)>>>0)%65536, h2=((i*668265263+13)>>>0)%65536;
+      ctx.fillStyle=i%3===0?_lightenC(sand[0],14):_darkenC(sand[1],12);
+      ctx.fillRect(Math.floor((h1/65535)*W), Math.floor(offY+sandY+6+(h2/65535)*(sandH-10)), 2, 2);
+    }
+  }
+
+  let _ocBg=null, _ocBgMin=-1;
+  function _buildOcBg(W, H) {
+    const bg=document.createElement("canvas"); bg.width=W; bg.height=H;
+    const ctx=bg.getContext("2d");
+    const hour=_ocHour(), sky=_ocSky(hour), tc=_ocTime(hour);
+    const skyH=Math.floor(H*_SKY_RATIO), seaH=H-skyH, sandY=Math.floor(seaH*(1-_SAND_H_RATIO));
+    // Sky
+    const grd=ctx.createLinearGradient(0,0,0,skyH);
+    grd.addColorStop(0,sky.top); grd.addColorStop(1,sky.bot);
+    ctx.fillStyle=grd; ctx.fillRect(0,0,W,skyH);
+    // Dithered water
+    _drawDither(ctx, W, seaH, _buildPalette(tc.water), skyH);
+    // Edge vignettes
+    let gL=ctx.createLinearGradient(0,skyH,W*0.25,skyH);
+    gL.addColorStop(0,"rgba(0,10,30,0.45)"); gL.addColorStop(1,"rgba(0,10,30,0)");
+    ctx.fillStyle=gL; ctx.fillRect(0,skyH,W*0.25,seaH);
+    let gR=ctx.createLinearGradient(W*0.75,skyH,W,skyH);
+    gR.addColorStop(0,"rgba(0,10,30,0)"); gR.addColorStop(1,"rgba(0,10,30,0.45)");
+    ctx.fillStyle=gR; ctx.fillRect(W*0.75,skyH,W*0.25,seaH);
+    // Pixel-art mist streaks
+    const streaks=[{y:0.18,x:0.15,w:0.35,op:0.12},{y:0.22,x:0.55,w:0.28,op:0.10},
+                   {y:0.34,x:0.08,w:0.22,op:0.09},{y:0.38,x:0.62,w:0.32,op:0.11},
+                   {y:0.48,x:0.20,w:0.45,op:0.08}];
+    for(const s of streaks){
+      ctx.fillStyle=`rgba(220,235,255,${s.op})`;
+      ctx.fillRect(W*s.x, skyH+Math.floor(seaH*s.y), W*s.w, 2);
+      ctx.fillRect(W*(s.x+0.02), skyH+Math.floor(seaH*s.y)+3, W*(s.w-0.05), 1);
+    }
+    // Sand
+    _drawSandLayer(ctx, W, seaH, sandY, skyH, tc.sand);
+    _ocBg=bg;
+  }
+  function _drawCausticLayer(ctx, W, seaH, skyH, ts) {
+    for(const c of _CAUSTIC_DEFS){
+      const x=c.xRatio*W+c.drift*Math.sin(c.speed*ts+c.phase);
+      const steps=Math.floor(seaH*0.55/6);
+      for(let i=0;i<steps;i++){
+        const taper=1-i/steps, w=Math.max(2,Math.round(c.width*taper));
+        ctx.fillStyle=`rgba(255,255,255,${c.opacity})`;
+        ctx.fillRect(Math.round(x-w/2), skyH+i*6, w, 4);
+      }
+    }
+  }
+  function fsStartOcean() {
+    const canvas=document.getElementById("fs-canvas"); if(!canvas) return;
+    const resize=()=>{
+      const r=canvas.getBoundingClientRect();
+      const W=Math.round(r.width)||900, H=Math.round(r.height)||500;
+      if(W!==canvas.width||H!==canvas.height){ canvas.width=W; canvas.height=H; _ocBg=null; }
+    };
+    new ResizeObserver(resize).observe(canvas); resize();
+    function frame(ts){
+      requestAnimationFrame(frame);
+      const W=canvas.width, H=canvas.height; if(!W||!H) return;
+      const min=Math.floor(_ocHour()*60);
+      if(!_ocBg||_ocBg.width!==W||_ocBg.height!==H||min!==_ocBgMin){ _buildOcBg(W,H); _ocBgMin=min; }
+      const ctx=canvas.getContext("2d");
+      ctx.drawImage(_ocBg,0,0);
+      _drawCausticLayer(ctx, W, H-Math.floor(H*_SKY_RATIO), Math.floor(H*_SKY_RATIO), ts);
+    }
+    requestAnimationFrame(frame);
+  }
+
   // ===== Fish Studio =====
   const FISH_POSITIONS = [
     { x:  8, y: 22 }, { x: 36, y: 15 }, { x: 63, y: 28 }, { x: 82, y: 12 },
@@ -332,6 +511,7 @@
   function fsInit() {
     if (fsLoaded) return;
     fsLoaded = true;
+    fsStartOcean();
     fsLoadExisting();
   }
 
