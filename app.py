@@ -885,7 +885,7 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
 
     # ref frame + 8 + 7 = 16 frames in a 4×4 grid = 1024×1024
     locked1 = _call_pl(img)
-    locked2 = _call_pl(locked1[-1])[:_FS_CONT]
+    locked2 = _call_pl(img)[:_FS_CONT]
     all_frames = [img] + locked1 + locked2
     n = len(all_frames)
     sheet = _PILImage.new("RGBA", (4 * _FS_FRAME, 4 * _FS_FRAME), (0, 0, 0, 0))
