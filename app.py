@@ -661,6 +661,7 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
     sheet = _PILImage.new("RGBA", (_FS_COLS * _FS_FRAME, _FS_ROWS * _FS_FRAME), (0, 0, 0, 0))
     for i, f in enumerate(locked):
         sheet.paste(f, ((i % _FS_COLS) * _FS_FRAME, (i // _FS_COLS) * _FS_FRAME))
+    sheet = sheet.resize((1024, 1024), _PILImage.NEAREST)
     out = io.BytesIO(); sheet.save(out, format="PNG")
     return out.getvalue(), n
 
@@ -878,6 +879,7 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
     sheet = _PILImage.new("RGBA", (_FS_COLS * _FS_FRAME, _FS_ROWS * _FS_FRAME), (0, 0, 0, 0))
     for i, f in enumerate(locked):
         sheet.paste(f, ((i % _FS_COLS) * _FS_FRAME, (i // _FS_COLS) * _FS_FRAME))
+    sheet = sheet.resize((1024, 1024), _PILImage.NEAREST)
     out = io.BytesIO(); sheet.save(out, format="PNG")
     return out.getvalue(), n
 
