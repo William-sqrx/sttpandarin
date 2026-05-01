@@ -739,6 +739,55 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
     return JSONResponse({"job_id": sj.id})
 
 
+@app.post("/api/sprite/batch")
+async def sprite_batch(request: Request,
+                       files: list[UploadFile] = File(...)) -> JSONResponse:
+    """Submit many fish at once. One server-side worker generates 3 sprites
+    for each file sequentially, so the laptop can be closed after submission.
+    """
+    _require_auth(request)
+    if not PIXELLAB_SECRET:
+        raise HTTPException(400, "PIXELLAB_SECRET not configured on server")
+    if not files:
+        raise HTTPException(400, "no files uploaded")
+
+    # Buffer everything before returning so the client can disconnect.
+    payload = []
+    for f in files:
+        payload.append((f.filename or "fish.png", await f.read()))
+
+    sj = _SpriteJob(id=uuid.uuid4().hex)
+    sj.total = len(payload) * _FS_GENS
+    with _SJOBS_LOCK:
+        _SJOBS[sj.id] = sj
+
+    def worker() -> None:
+        sj.status = "running"
+        for fname, ref_bytes in payload:
+            for _ in range(_FS_GENS):
+                try:
+                    sheet_bytes, n_frames = _generate_one(ref_bytes)
+                    sid = uuid.uuid4().hex
+                    d = SPRITES_DIR / sid
+                    d.mkdir(parents=True, exist_ok=True)
+                    (d / "sheet.png").write_bytes(sheet_bytes)
+                    meta = {"id": sid, "name": fname, "cols": n_frames,
+                            "rows": 1, "total": n_frames,
+                            "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                            "created_at": time.time()}
+                    (d / "meta.json").write_text(json.dumps(meta))
+                    sj.completed.append(meta)
+                except Exception as e:
+                    sj.error = str(e)
+                finally:
+                    sj.done += 1
+        sj.status = "done"
+
+    threading.Thread(target=worker, daemon=True).start()
+    return JSONResponse({"job_id": sj.id, "files": len(payload),
+                         "total_sprites": sj.total})
+
+
 @app.get("/api/sprite/{sprite_id}/image")
 async def sprite_image(sprite_id: str, request: Request) -> Response:
     _require_auth(request)
@@ -952,6 +1001,55 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
 
     threading.Thread(target=worker, daemon=True).start()
     return JSONResponse({"job_id": sj.id})
+
+
+@app.post("/api/sprite/batch")
+async def sprite_batch(request: Request,
+                       files: list[UploadFile] = File(...)) -> JSONResponse:
+    """Submit many fish at once. One server-side worker generates 3 sprites
+    for each file sequentially, so the laptop can be closed after submission.
+    """
+    _require_auth(request)
+    if not PIXELLAB_SECRET:
+        raise HTTPException(400, "PIXELLAB_SECRET not configured on server")
+    if not files:
+        raise HTTPException(400, "no files uploaded")
+
+    # Buffer everything before returning so the client can disconnect.
+    payload = []
+    for f in files:
+        payload.append((f.filename or "fish.png", await f.read()))
+
+    sj = _SpriteJob(id=uuid.uuid4().hex)
+    sj.total = len(payload) * _FS_GENS
+    with _SJOBS_LOCK:
+        _SJOBS[sj.id] = sj
+
+    def worker() -> None:
+        sj.status = "running"
+        for fname, ref_bytes in payload:
+            for _ in range(_FS_GENS):
+                try:
+                    sheet_bytes, n_frames = _generate_one(ref_bytes)
+                    sid = uuid.uuid4().hex
+                    d = SPRITES_DIR / sid
+                    d.mkdir(parents=True, exist_ok=True)
+                    (d / "sheet.png").write_bytes(sheet_bytes)
+                    meta = {"id": sid, "name": fname, "cols": n_frames,
+                            "rows": 1, "total": n_frames,
+                            "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                            "created_at": time.time()}
+                    (d / "meta.json").write_text(json.dumps(meta))
+                    sj.completed.append(meta)
+                except Exception as e:
+                    sj.error = str(e)
+                finally:
+                    sj.done += 1
+        sj.status = "done"
+
+    threading.Thread(target=worker, daemon=True).start()
+    return JSONResponse({"job_id": sj.id, "files": len(payload),
+                         "total_sprites": sj.total})
 
 
 @app.get("/api/sprite/{sprite_id}/image")
