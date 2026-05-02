@@ -279,7 +279,7 @@ EVERY prompt MUST contain these sections, in this exact order, with these exact 
    • Base colour with a real-life-accurate hex code in parens (e.g. "#D94F2A range").
    • Pattern colours and where they appear.
    • Fin colour.
-   • Outline colour.
+   • Outline colour — MANDATORY, NEVER OMIT. Always specify an explicit outline colour as a darker tonal cousin of the base colour (e.g. base red-orange → outline deep rust-brown; base pink-grey → outline deep grey-mauve; base muted yellow → outline deep mustard-brown; base teal → outline deep navy-teal). Every fish must have a clean visible outline of consistent thickness — this is what makes the kawaii cartoon style cohere across the whole series.
    • End with "NO highlight, NO sheen. Flat watercolour only." (or similar).
 
 5. FACE:

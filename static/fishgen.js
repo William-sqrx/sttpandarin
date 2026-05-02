@@ -193,15 +193,20 @@
   async function onDownload(cell) {
     const { slug, stage } = cell.dataset;
     const meta = state.metas[`${slug}/${stage}`];
-    const useSheet = meta && meta.has_sheet;
-    const url = useSheet
-      ? `/api/fishgen/${slug}/${stage}/sheet`
-      : `/api/fishgen/${slug}/${stage}/image`;
-    const filename = `${slug}-${stage}${useSheet ? "-sheet" : ""}.png`;
+    // Try sheet first if meta says it exists; fall back to image on 404
+    // (covers stale meta where the sheet was deleted server-side).
+    const candidates = [];
+    if (meta && meta.has_sheet) candidates.push({ kind: "sheet", url: `/api/fishgen/${slug}/${stage}/sheet` });
+    candidates.push({ kind: "image", url: `/api/fishgen/${slug}/${stage}/image` });
     try {
-      const r = await fetch(url, { credentials: "same-origin" });
-      if (!r.ok) throw new Error(r.statusText);
-      const blob = await r.blob();
+      let blob = null, kind = "image";
+      for (const c of candidates) {
+        const r = await fetch(c.url, { credentials: "same-origin" });
+        if (r.ok) { blob = await r.blob(); kind = c.kind; break; }
+        if (r.status !== 404) throw new Error(r.statusText);
+      }
+      if (!blob) throw new Error("nothing to download");
+      const filename = `${slug}-${stage}${kind === "sheet" ? "-sheet" : ""}.png`;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = filename;
