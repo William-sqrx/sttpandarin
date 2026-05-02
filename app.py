@@ -637,7 +637,8 @@ def _generate_one(ref_png: bytes, action: str | None = None) -> tuple[bytes, int
         raise RuntimeError("Pillow not installed — pip install Pillow")
 
     img = _PILImage.open(io.BytesIO(ref_png)).convert("RGBA")
-    # Send at original resolution — PixelLab handles sizing internally.
+    if img.size != (_FS_FRAME, _FS_FRAME):
+        img = img.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
 
     ref_pal = img.convert("RGB").quantize(colors=256, method=_PILImage.Quantize.MEDIANCUT)
 
