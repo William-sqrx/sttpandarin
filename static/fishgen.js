@@ -168,6 +168,7 @@
     cell.dataset.hasImage = meta.has_image ? "1" : "";
     cell.dataset.hasSheet = meta.has_sheet ? "1" : "";
     $(".animate", cell).disabled = !meta.has_image || !state.pixellabOk;
+    $(".download", cell).disabled = !meta.has_image && !meta.has_sheet;
     $(".wipe", cell).hidden = !meta.has_image && !meta.has_sheet;
     $(".prompt", cell).value = meta.prompt || "";
   }
@@ -249,22 +250,6 @@
     }
   }
 
-  async function onSavePrompt(cell) {
-    const { slug, stage } = cell.dataset;
-    const prompt = $(".prompt", cell).value;
-    setBusy(cell, "saving…");
-    try {
-      await api("POST",
-        `/api/fishgen/${slug}/${stage}/prompt`, { prompt });
-      setStatus(cell, "prompt saved", "ok");
-      state.metas[`${slug}/${stage}`].prompt = prompt;
-    } catch (e) {
-      setStatus(cell, "✗ " + e.message, "err");
-    } finally {
-      setBusy(cell, "");
-    }
-  }
-
   async function onSuggestPrompt(cell) {
     const { slug, stage } = cell.dataset;
     setBusy(cell, "asking Claude…");
@@ -273,8 +258,6 @@
       const out = await api("POST",
         `/api/fishgen/${slug}/${stage}/suggest_prompt`);
       $(".prompt", cell).value = out.prompt || "";
-      const block = $(".prompt-block", cell);
-      if (block.hidden) block.hidden = false;
       setStatus(cell, `✓ drafted (${out.model || "claude"})`, "ok");
     } catch (e) {
       setStatus(cell, "✗ " + e.message, "err");
@@ -284,41 +267,27 @@
     }
   }
 
-  async function onResetPrompt(cell) {
+  async function onDownload(cell) {
     const { slug, stage } = cell.dataset;
-    setBusy(cell, "loading default…");
+    const meta = state.metas[`${slug}/${stage}`];
+    const useSheet = meta && meta.has_sheet;
+    const url = useSheet
+      ? `/api/fishgen/${slug}/${stage}/sheet`
+      : `/api/fishgen/${slug}/${stage}/image`;
+    const filename = `${slug}-${stage}${useSheet ? "-sheet" : ""}.png`;
     try {
-      // Save an empty string locally then ask server for the default.
-      // Server will return the default if no prompt.txt exists, but
-      // we don't want to delete any saved prompt — just preview the
-      // template. We hit a special case: temporarily clear value to
-      // get default text.
-      const r = await api("GET",
-        `/api/fishgen/${slug}/${stage}/prompt`);
-      // If the server says default=true, that's the template. If the
-      // user has a saved one, we still load that — easier for them
-      // to see what's saved. Pull "default" by clearing: skip server
-      // call and use a hard-coded fallback path instead.
-      if (r.default) {
-        $(".prompt", cell).value = r.prompt;
-        setStatus(cell, "loaded default", "ok");
-      } else {
-        // Force-fetch default by hitting the endpoint with a flag —
-        // there's no such flag, so we approximate: hint the user.
-        $(".prompt", cell).value = r.prompt;
-        setStatus(cell, "loaded saved prompt (delete prompt.txt on disk to see fresh default)", "ok");
-      }
+      const r = await fetch(url, { credentials: "same-origin" });
+      if (!r.ok) throw new Error(r.statusText);
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     } catch (e) {
-      setStatus(cell, "✗ " + e.message, "err");
-    } finally {
-      setBusy(cell, "");
+      toast("Download failed: " + e.message, "err");
     }
-  }
-
-  function onTogglePrompt(cell) {
-    const block = $(".prompt-block", cell);
-    block.hidden = !block.hidden;
-    if (!block.hidden) $(".prompt", cell).focus();
   }
 
   async function onWipe(cell) {
@@ -373,11 +342,20 @@
       $(".prompt", cell).value = meta.prompt || "";
       $(".generate", cell).addEventListener("click", () => onGenerate(cell));
       $(".animate", cell).addEventListener("click", () => onAnimate(cell));
-      $(".save-prompt", cell).addEventListener("click", () => onSavePrompt(cell));
-      $(".reset-prompt", cell).addEventListener("click", () => onResetPrompt(cell));
       $(".suggest-prompt", cell).addEventListener("click", () => onSuggestPrompt(cell));
-      $(".edit-prompt", cell).addEventListener("click", () => onTogglePrompt(cell));
+      $(".download", cell).addEventListener("click", () => onDownload(cell));
       $(".wipe", cell).addEventListener("click", () => onWipe(cell));
+      // Auto-save prompt on blur
+      $(".prompt", cell).addEventListener("blur", async () => {
+        const { slug, stage } = cell.dataset;
+        const prompt = $(".prompt", cell).value;
+        try {
+          await api("POST", `/api/fishgen/${slug}/${stage}/prompt`, { prompt });
+          if (state.metas[`${slug}/${stage}`]) {
+            state.metas[`${slug}/${stage}`].prompt = prompt;
+          }
+        } catch {}
+      });
       grid.appendChild(cell);
     }
   }
