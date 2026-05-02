@@ -1,18 +1,5 @@
 /* Fish generator page — clean utility look. Self-contained styles. */
 
-.style-ref-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 24px;
-  background: #fff;
-  border-bottom: 1px solid #e2e7f0;
-  font-size: 13px;
-}
-.style-ref-label { font-weight: 600; color: #5b6680; white-space: nowrap; }
-.style-ref-slot  { flex: 1; }
-.style-ref-thumb { height: 48px; width: 48px; object-fit: contain; border-radius: 6px; border: 1px solid #e2e7f0; background: #111; }
-.style-ref-empty { color: #9ba4b8; font-style: italic; }
 
 * { box-sizing: border-box; }
 
@@ -145,10 +132,22 @@ main { max-width: 1400px; margin: 0 auto; padding: 20px 24px 80px; }
 .preview .still { object-fit: contain; }
 .preview .sheet { background: transparent; }
 .preview .placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.drop-hint {
   color: #9aa3b8;
   font-size: 12px;
   font-style: italic;
+  text-align: center;
+  line-height: 1.6;
+  pointer-events: none;
 }
+.drop-zone { cursor: pointer; }
+.drop-zone.drag-over { outline: 2px dashed #4f6bd8; outline-offset: -4px; background: #f0f3fc; }
 .preview .overlay {
   position: absolute;
   inset: 0;

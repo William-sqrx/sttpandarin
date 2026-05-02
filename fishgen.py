@@ -637,6 +637,25 @@ class GenerateBody(BaseModel):
     save_prompt: bool = True
 
 
+@router.post("/api/fishgen/{slug}/{stage}/upload")
+async def fishgen_upload(slug: str, stage: str,
+                         request: Request) -> JSONResponse:
+    """Accept a user-supplied PNG (generated on the OpenAI platform or
+    elsewhere) and save it as the still image for this cell."""
+    _require_auth(request)
+    d = _stage_dir(slug, stage)
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "no image data")
+    (d / "image.png").write_bytes(body)
+    for fn in ("sheet.png", "sheet_meta.json"):
+        try:
+            (d / fn).unlink()
+        except FileNotFoundError:
+            pass
+    return JSONResponse({"ok": True, "meta": _stage_meta(slug, stage)})
+
+
 @router.post("/api/fishgen/{slug}/{stage}/generate")
 async def fishgen_generate(slug: str, stage: str, body: GenerateBody,
                            request: Request) -> JSONResponse:

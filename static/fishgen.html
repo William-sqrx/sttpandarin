@@ -3,14 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fish Generator — Chinesely</title>
+<title>Fish Animator — Chinesely</title>
 <link rel="stylesheet" href="/static/fishgen.css">
 </head>
 <body>
 <header class="topbar">
-  <h1>Fish generator</h1>
+  <h1>Fish animator</h1>
   <div class="meta">
-    <span id="openai-status" class="badge">OpenAI: …</span>
     <span id="anthropic-status" class="badge">Claude: …</span>
     <span id="pixellab-status" class="badge">PixelLab: …</span>
     <a class="back" href="/">← back</a>
@@ -18,16 +17,11 @@
 </header>
 
 <main>
-  <div class="style-ref-bar">
-    <div class="style-ref-label">Style reference (adult)</div>
-    <div class="style-ref-slot" id="style-ref-slot">
-      <img id="style-ref-img" class="style-ref-thumb" hidden alt="style ref">
-      <span id="style-ref-empty" class="style-ref-empty">No reference — adults use text-to-image</span>
-    </div>
-    <label class="btn small" for="style-ref-input">Upload PNG</label>
-    <input type="file" id="style-ref-input" accept="image/png" style="display:none">
-    <button class="btn danger small" id="style-ref-clear" hidden>Remove</button>
-  </div>
+  <p class="legend">
+    Generate your fish on the OpenAI platform, then drop the PNG into any cell.
+    Click <strong>Animate</strong> to render a swim-in-place sprite sheet via PixelLab,
+    then <strong>Download</strong>.
+  </p>
   <div id="grid" class="grid"></div>
 </main>
 
@@ -35,22 +29,24 @@
 
 <template id="cell-template">
   <div class="cell">
-    <div class="preview">
+    <div class="preview drop-zone" title="Click or drop PNG to upload">
       <img class="still" alt="" hidden>
       <canvas class="sheet" hidden></canvas>
-      <div class="placeholder">no image</div>
+      <div class="placeholder">
+        <span class="drop-hint">Drop PNG<br>or click to upload</span>
+      </div>
       <div class="overlay" hidden>
         <span class="overlay-text">working…</span>
       </div>
+      <input type="file" class="file-input" accept="image/png" style="display:none">
     </div>
     <div class="prompt-block">
-      <textarea class="prompt" rows="6" spellcheck="false"></textarea>
+      <textarea class="prompt" rows="5" spellcheck="false" placeholder="Paste or generate a prompt to use on the OpenAI platform…"></textarea>
       <div class="prompt-actions">
         <button class="btn small suggest-prompt" type="button">Suggest with Claude</button>
       </div>
     </div>
     <div class="actions">
-      <button class="btn primary generate" type="button">Generate</button>
       <button class="btn secondary animate" type="button" disabled>Animate</button>
       <button class="btn ghost small download" type="button" disabled>Download</button>
       <button class="btn danger small wipe" type="button" title="Delete saved image + sheet" hidden>×</button>
