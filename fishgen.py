@@ -556,7 +556,7 @@ async def fishgen_list(request: Request) -> JSONResponse:
     _require_auth(request)
     # Lazy-read PIXELLAB_SECRET each call so a server-side env update
     # is reflected without restart.
-    from app import PIXELLAB_SECRET  # noqa: WPS433
+    from app import PIXELLAB_SECRET, _FS_ACTION  # noqa: WPS433
     rows = []
     for name in SPECIES:
         slug = _slug(name)
