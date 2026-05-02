@@ -31,7 +31,7 @@ import requests
 # ----- Config (env-driven) ---------------------------------------------------
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1")
+OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1.5")
 OPENAI_BASE = os.getenv("OPENAI_BASE", "https://api.openai.com/v1")
 
 # Claude (Anthropic) is used for the "Suggest prompt" feature — it
