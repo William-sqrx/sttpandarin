@@ -41,10 +41,20 @@
       <input type="file" class="file-input" accept="image/png" style="display:none">
     </div>
     <div class="prompt-block">
+      <label class="prompt-label">Image prompt</label>
       <textarea class="prompt" rows="5" spellcheck="false" placeholder="Paste or generate a prompt to use on the OpenAI platform…"></textarea>
       <div class="prompt-actions">
         <button class="btn small suggest-prompt" type="button">Suggest with Claude</button>
       </div>
+      <div class="refine-log"></div>
+      <div class="refine-row">
+        <textarea class="refine-input" rows="2" spellcheck="false" placeholder="Describe what's wrong with the result… e.g. body is too round, fins too small"></textarea>
+        <button class="btn small refine-btn" type="button">Refine</button>
+      </div>
+    </div>
+    <div class="prompt-block animate-prompt-block">
+      <label class="prompt-label">Animation prompt</label>
+      <textarea class="animate-prompt" rows="3" spellcheck="false"></textarea>
     </div>
     <div class="actions">
       <button class="btn secondary animate" type="button" disabled>Animate</button>

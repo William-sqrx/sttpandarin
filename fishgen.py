@@ -473,6 +473,59 @@ def _claude_suggest_prompt(species: str, stage: str) -> str:
     return text
 
 
+_REFINE_SYSTEM = """\
+You are refining image-generation prompts for a series of kawaii cartoon fish illustrations. The user has a current prompt and is giving you feedback about what was wrong with the generated image (e.g. "too round", "fins too small", "colour too orange").
+
+Your job: return a revised version of the prompt that addresses the feedback while keeping everything else the same — same template structure (opening, THE UNLOCK FEELING, SILHOUETTE, PALETTE, FACE, GUARDRAILS), same art style requirements, same kawaii treatment.
+
+Rules:
+- Output ONLY the revised prompt. No preamble, no explanation, no markdown fences.
+- Keep every section that did not need changing exactly as it was.
+- Make targeted edits only — do not rewrite sections that were not mentioned in the feedback.
+- If the feedback is about shape (e.g. "too round"), adjust the SILHOUETTE section and add a GUARDRAIL.
+- If the feedback is about colour, adjust the PALETTE section.
+- If the feedback is about a specific feature being wrong, fix that bullet and reinforce it in GUARDRAILS.
+"""
+
+
+def _claude_refine_prompt(history: list[dict]) -> str:
+    """Call Anthropic with a multi-turn conversation to refine a prompt."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(400, "ANTHROPIC_API_KEY not configured on server")
+    body = {
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 2000,
+        "temperature": 0.5,
+        "system": _REFINE_SYSTEM,
+        "messages": history,
+    }
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    try:
+        r = requests.post(
+            f"{ANTHROPIC_BASE}/messages",
+            headers=headers, json=body, timeout=120,
+        )
+    except requests.RequestException as e:
+        raise HTTPException(502, f"Anthropic request failed: {e}")
+    if r.status_code != 200:
+        raise HTTPException(502, f"Anthropic {r.status_code}: {r.text[:400]}")
+    j = r.json()
+    blocks = j.get("content") or []
+    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+    if not text:
+        raise HTTPException(502, f"Anthropic returned no text: {r.text[:200]}")
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0]
+        text = text.strip()
+    return text
+
+
 # ----- Auth bridge -----------------------------------------------------------
 
 def _require_auth(request: Request) -> None:
@@ -520,6 +573,7 @@ async def fishgen_list(request: Request) -> JSONResponse:
         "anthropic_configured": bool(ANTHROPIC_API_KEY),
         "anthropic_model": ANTHROPIC_MODEL,
         "has_style_ref": STYLE_REF_PATH.exists(),
+        "default_animate_prompt": _FS_ACTION,
     })
 
 
@@ -594,6 +648,26 @@ async def fishgen_suggest_prompt(slug: str, stage: str,
         raise HTTPException(404, f"unknown stage: {stage}")
     species_name = SLUG_TO_NAME[slug]
     prompt = _claude_suggest_prompt(species_name, stage)
+    return JSONResponse({"prompt": prompt, "model": ANTHROPIC_MODEL})
+
+
+class RefineBody(BaseModel):
+    history: list[dict]  # [{role: "user"|"assistant", content: str}]
+
+
+@router.post("/api/fishgen/{slug}/{stage}/refine_prompt")
+async def fishgen_refine_prompt(slug: str, stage: str, body: RefineBody,
+                                request: Request) -> JSONResponse:
+    """Refine an existing prompt based on user feedback. The client sends
+    the full conversation history; Claude returns an improved prompt."""
+    _require_auth(request)
+    if slug not in SLUG_TO_NAME:
+        raise HTTPException(404, f"unknown species: {slug}")
+    if stage not in STAGE_KEYS:
+        raise HTTPException(404, f"unknown stage: {stage}")
+    if not body.history:
+        raise HTTPException(400, "history must not be empty")
+    prompt = _claude_refine_prompt(body.history)
     return JSONResponse({"prompt": prompt, "model": ANTHROPIC_MODEL})
 
 
@@ -699,8 +773,12 @@ async def fishgen_generate(slug: str, stage: str, body: GenerateBody,
     })
 
 
+class AnimateBody(BaseModel):
+    action: str = ""  # empty = use server default _FS_ACTION
+
+
 @router.post("/api/fishgen/{slug}/{stage}/animate")
-async def fishgen_animate(slug: str, stage: str,
+async def fishgen_animate(slug: str, stage: str, body: AnimateBody,
                           request: Request) -> JSONResponse:
     """Generate the swim-in-place sprite sheet from the saved still
     image. Reuses the existing PixelLab pipeline (`_generate_one` from
@@ -716,8 +794,9 @@ async def fishgen_animate(slug: str, stage: str,
     d = _stage_dir(slug, stage)
     ref_path = d / "image.png"
     if not ref_path.exists():
-        raise HTTPException(400, "generate the still image first")
-    sheet_bytes, n_frames = _generate_one(ref_path.read_bytes())
+        raise HTTPException(400, "upload an image first")
+    action = body.action.strip() or None
+    sheet_bytes, n_frames = _generate_one(ref_path.read_bytes(), action=action)
     (d / "sheet.png").write_bytes(sheet_bytes)
     (d / "sheet_meta.json").write_text(json.dumps({
         "frames": n_frames,

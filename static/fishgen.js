@@ -6,7 +6,9 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  const state = { species: [], stages: [], pixellabOk: false, anthropicOk: false, anthropicModel: "", metas: {} };
+  const state = { species: [], stages: [], pixellabOk: false, anthropicOk: false, anthropicModel: "", defaultAnimatePrompt: "", metas: {} };
+  // Per-cell conversation history: key = "slug/stage", value = [{role,content}]
+  const histories = {};
 
   // ─── HTTP helpers ────────────────────────────────────────────────────
 
@@ -171,10 +173,11 @@
 
   async function onAnimate(cell) {
     const { slug, stage } = cell.dataset;
+    const action = $(".animate-prompt", cell).value.trim();
     setBusy(cell, "animating…");
     setStatus(cell, "PixelLab rendering 8 frames (30–90 s)…", "busy");
     try {
-      const out = await api("POST", `/api/fishgen/${slug}/${stage}/animate`);
+      const out = await api("POST", `/api/fishgen/${slug}/${stage}/animate`, { action });
       state.metas[`${slug}/${stage}`] = out.meta;
       applyMeta(cell, out.meta);
       await refreshSheet(cell, slug, stage);
@@ -216,8 +219,16 @@
     setStatus(cell, "drafting prompt (5–15 s)…", "busy");
     try {
       const out = await api("POST", `/api/fishgen/${slug}/${stage}/suggest_prompt`);
-      $(".prompt", cell).value = out.prompt || "";
-      setStatus(cell, `✓ prompt ready — paste it into the OpenAI platform`, "ok");
+      const prompt = out.prompt || "";
+      $(".prompt", cell).value = prompt;
+      // Seed the conversation history with this as the first assistant turn
+      const key = `${slug}/${stage}`;
+      histories[key] = [
+        { role: "user", content: `Write a ${stage} prompt for ${SLUG_TO_NAME[slug] || slug}.` },
+        { role: "assistant", content: prompt },
+      ];
+      $(".refine-log", cell).innerHTML = "";
+      setStatus(cell, "✓ prompt ready — paste into OpenAI platform", "ok");
     } catch (e) {
       setStatus(cell, "✗ " + e.message, "err");
       toast(e.message, "err");
@@ -225,6 +236,58 @@
       setBusy(cell, "");
     }
   }
+
+  async function onRefinePrompt(cell) {
+    const { slug, stage } = cell.dataset;
+    const feedback = $(".refine-input", cell).value.trim();
+    if (!feedback) return;
+    const currentPrompt = $(".prompt", cell).value.trim();
+    if (!currentPrompt) { toast("Add a prompt first", "err"); return; }
+
+    const key = `${slug}/${stage}`;
+    // Build history: if none yet, seed with the current prompt as first assistant turn
+    if (!histories[key] || !histories[key].length) {
+      histories[key] = [
+        { role: "user", content: `Write a ${stage} prompt for ${SLUG_TO_NAME[slug] || slug}.` },
+        { role: "assistant", content: currentPrompt },
+      ];
+    }
+    // Append user feedback
+    histories[key].push({ role: "user", content: feedback });
+
+    setBusy(cell, "refining…");
+    setStatus(cell, "Claude is tweaking the prompt…", "busy");
+    try {
+      const out = await api("POST", `/api/fishgen/${slug}/${stage}/refine_prompt`, { history: histories[key] });
+      const refined = out.prompt || "";
+      // Append assistant response to history
+      histories[key].push({ role: "assistant", content: refined });
+      $(".prompt", cell).value = refined;
+      $(".refine-input", cell).value = "";
+      // Append to log
+      const log = $(".refine-log", cell);
+      const entry = document.createElement("div");
+      entry.className = "refine-entry";
+      entry.innerHTML = `<span class="refine-tag">you</span>${escHtml(feedback)}`;
+      log.appendChild(entry);
+      log.scrollTop = log.scrollHeight;
+      setStatus(cell, "✓ prompt refined", "ok");
+    } catch (e) {
+      // Roll back the user message we optimistically pushed
+      histories[key].pop();
+      setStatus(cell, "✗ " + e.message, "err");
+      toast(e.message, "err");
+    } finally {
+      setBusy(cell, "");
+    }
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // Lookup slug → display name from loaded species list
+  const SLUG_TO_NAME = {};
 
   async function onWipe(cell) {
     const { slug, stage } = cell.dataset;
@@ -295,6 +358,11 @@
       });
 
       $(".suggest-prompt", cell).addEventListener("click", () => onSuggestPrompt(cell));
+      $(".refine-btn", cell).addEventListener("click", () => onRefinePrompt(cell));
+      $(".refine-input", cell).addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onRefinePrompt(cell); }
+      });
+      $(".animate-prompt", cell).value = state.defaultAnimatePrompt;
       $(".animate", cell).addEventListener("click", () => onAnimate(cell));
       $(".download", cell).addEventListener("click", () => onDownload(cell));
       $(".wipe", cell).addEventListener("click", () => onWipe(cell));
@@ -320,10 +388,13 @@
       state.pixellabOk = list.pixellab_configured;
       state.anthropicOk = list.anthropic_configured;
       state.anthropicModel = list.anthropic_model || "Claude";
+      state.defaultAnimatePrompt = list.default_animate_prompt || "";
       state.metas = {};
-      for (const sp of list.species)
+      for (const sp of list.species) {
+        SLUG_TO_NAME[sp.slug] = sp.name;
         for (const m of sp.stages)
           state.metas[`${m.slug}/${m.stage}`] = m;
+      }
 
       const pl = $("#pixellab-status");
       pl.classList.toggle("ok", state.pixellabOk);

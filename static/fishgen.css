@@ -168,6 +168,13 @@ main { max-width: 1400px; margin: 0 auto; padding: 20px 24px 80px; }
   flex-direction: column;
   gap: 6px;
 }
+.prompt-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #5b6680;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
 .prompt-block textarea {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -177,7 +184,7 @@ main { max-width: 1400px; margin: 0 auto; padding: 20px 24px 80px; }
   border: 1px solid #d8dde9;
   border-radius: 6px;
   resize: vertical;
-  min-height: 90px;
+  min-height: 70px;
   color: #1a2236;
   background: #fafbfd;
 }
@@ -186,6 +193,50 @@ main { max-width: 1400px; margin: 0 auto; padding: 20px 24px 80px; }
   border-color: #4f6bd8;
 }
 .prompt-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* Refine chat */
+.refine-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+.refine-entry {
+  font-size: 11px;
+  color: #4a5470;
+  background: #f0f3fc;
+  border-radius: 4px;
+  padding: 4px 8px;
+  line-height: 1.4;
+}
+.refine-tag {
+  font-weight: 700;
+  color: #4f6bd8;
+  margin-right: 6px;
+}
+.refine-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+.refine-row .refine-input {
+  flex: 1;
+  min-height: 0;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid #d8dde9;
+  border-radius: 6px;
+  resize: none;
+  color: #1a2236;
+  background: #fafbfd;
+}
+.refine-row .refine-input:focus {
+  outline: 2px solid #b6c2ed;
+  border-color: #4f6bd8;
+}
+.animate-prompt-block { margin-top: 4px; }
 
 .actions {
   display: flex;

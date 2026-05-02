@@ -632,7 +632,7 @@ def _pl_poll(job_id: str) -> dict:
     raise RuntimeError("PixelLab job timed out")
 
 
-def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
+def _generate_one(ref_png: bytes, action: str | None = None) -> tuple[bytes, int]:
     if not _PIL_OK:
         raise RuntimeError("Pillow not installed — pip install Pillow")
 
@@ -657,7 +657,7 @@ def _generate_one(ref_png: bytes) -> tuple[bytes, int]:
                "format": "png"}
         payload = json.dumps({
             "first_frame": b64, "last_frame": b64,
-            "action": _FS_ACTION, "frame_count": _FS_FRAMES,
+            "action": action or _FS_ACTION, "frame_count": _FS_FRAMES,
             "no_background": True, "seed": random.randint(1, 2 ** 31 - 1),
         })
         conn = http.client.HTTPSConnection("api.pixellab.ai")
