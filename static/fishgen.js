@@ -12,6 +12,8 @@
     stages: [],
     openaiOk: false,
     pixellabOk: false,
+    anthropicOk: false,
+    anthropicModel: "",
   };
 
   // ─── HTTP helpers ────────────────────────────────────────────────────
@@ -263,6 +265,25 @@
     }
   }
 
+  async function onSuggestPrompt(cell) {
+    const { slug, stage } = cell.dataset;
+    setBusy(cell, "asking Claude…");
+    setStatus(cell, "drafting prompt with Claude (5–15 s)…", "busy");
+    try {
+      const out = await api("POST",
+        `/api/fishgen/${slug}/${stage}/suggest_prompt`);
+      $(".prompt", cell).value = out.prompt || "";
+      const block = $(".prompt-block", cell);
+      if (block.hidden) block.hidden = false;
+      setStatus(cell, `✓ drafted (${out.model || "claude"})`, "ok");
+    } catch (e) {
+      setStatus(cell, "✗ " + e.message, "err");
+      toast(e.message, "err");
+    } finally {
+      setBusy(cell, "");
+    }
+  }
+
   async function onResetPrompt(cell) {
     const { slug, stage } = cell.dataset;
     setBusy(cell, "loading default…");
@@ -354,6 +375,7 @@
       $(".animate", cell).addEventListener("click", () => onAnimate(cell));
       $(".save-prompt", cell).addEventListener("click", () => onSavePrompt(cell));
       $(".reset-prompt", cell).addEventListener("click", () => onResetPrompt(cell));
+      $(".suggest-prompt", cell).addEventListener("click", () => onSuggestPrompt(cell));
       $(".edit-prompt", cell).addEventListener("click", () => onTogglePrompt(cell));
       $(".wipe", cell).addEventListener("click", () => onWipe(cell));
       grid.appendChild(cell);
@@ -383,8 +405,14 @@
       state.stages = list.stages;
       state.openaiOk = list.openai_configured;
       state.pixellabOk = list.pixellab_configured;
+      state.anthropicOk = list.anthropic_configured;
+      state.anthropicModel = list.anthropic_model || "Claude";
       rebuildMetas();
       paintBadge("openai-status", state.openaiOk, "OpenAI");
+      paintBadge("anthropic-status", state.anthropicOk,
+                 state.anthropicOk
+                   ? `Claude (${state.anthropicModel})`
+                   : "Claude");
       paintBadge("pixellab-status", state.pixellabOk, "PixelLab");
       renderGrid();
       // After the DOM is in place, lazily load existing images.

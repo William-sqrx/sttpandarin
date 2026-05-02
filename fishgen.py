@@ -34,6 +34,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1")
 OPENAI_BASE = os.getenv("OPENAI_BASE", "https://api.openai.com/v1")
 
+# Claude (Anthropic) is used for the "Suggest prompt" feature — it
+# writes a fresh species/stage-specific image prompt in the user's
+# established kawaii template. Image generation still uses OpenAI.
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+ANTHROPIC_BASE = os.getenv("ANTHROPIC_BASE", "https://api.anthropic.com/v1")
+
 APP_DIR = Path(__file__).resolve().parent
 FG_DIR = APP_DIR / "fishgen"
 FG_DIR.mkdir(exist_ok=True)
@@ -206,6 +213,229 @@ def _openai_image_edit(prompt: str, ref_png: bytes) -> bytes:
     return base64.b64decode(payload[0]["b64_json"])
 
 
+# ----- Prompt suggester (LLM) ------------------------------------------------
+
+# Few-shot system prompt teaching the model the exact template the
+# user wants. Three koi examples (adult, teen, baby) cover the full
+# stage chain; one blobfish adult adds variety so the model doesn't
+# overfit to "koi-shaped" results.
+_SUGGEST_SYSTEM = """\
+You write image-generation prompts for a series of kawaii cartoon fish illustrations. The artist will pass your prompt to gpt-image-1 to render the fish. You must follow the exact template, structure, and tone shown in the examples below — DO NOT add any prose around the prompt, DO NOT include markdown code fences, just output the prompt itself.
+
+ART STYLE (always): soft watercolour cartoon rendering, kawaii face (large eye, pink cheek circle, tiny smile), flat 2D side-view, body facing LEFT, fully transparent PNG background, no sheen, no 3D, no realism.
+
+THREE STAGES per species:
+- ADULT: full mature form. All distinguishing features present. Pure text-to-image, no reference image. The opening line describes the style requirements directly.
+- TEEN: a younger version of the adult. Simpler patterns, less developed fins, simpler tail. Opening line says "in the EXACT SAME art style as the attached reference image" and references the ADULT image as the source of truth for colour + rendering.
+- BABY: simplest form. Plain solid base colour, oversized head, tiny fins, no markings yet. References the TEEN image.
+
+EVERY prompt MUST contain these sections, in this exact order, with these exact section headers:
+
+1. Opening paragraph (no header). For adult: describes the art style requirements directly. For teen / baby: opens with "A single kawaii cartoon {stage} {species}, in the EXACT SAME art style as the attached reference image — same soft watercolour cartoon rendering, same outline thickness, same watercolour texture, same kawaii face treatment, same canvas resolution. Flat 2D side-view illustration, body facing LEFT. Fully transparent PNG background." then a second paragraph that explicitly references the previous-stage sprite as the colour/style anchor.
+
+2. THE UNLOCK FEELING: One short paragraph evoking what makes this stage's silhouette distinct. Use plain language, hint at the species' identity and what about it is "almost there" or "fully there" or "not there yet" depending on stage.
+
+3. SILHOUETTE:
+   • Bullet points describing body shape (with width-to-height ratio for adult/teen), head, fins, tail, distinguishing features specific to this species (e.g. koi has barbels, blobfish has droopy nose, axolotl has gill stalks).
+
+4. PALETTE:
+   • Base colour with a real-life-accurate hex code in parens (e.g. "#D94F2A range").
+   • Pattern colours and where they appear.
+   • Fin colour.
+   • Outline colour.
+   • End with "NO highlight, NO sheen. Flat watercolour only." (or similar).
+
+5. FACE:
+   • Bullet describing the kawaii face treatment for this stage.
+
+6. GUARDRAILS:
+   • Bullet points enforcing the most important constraints — what MUST be present, what MUST NOT. Include "NO sheen or shine." and "FLAT 2D cartoon — no 3D, no realism, no photograph." as last two items.
+
+EXAMPLES:
+
+=== ADULT KOI ===
+A single kawaii cartoon adult koi fish, in the EXACT SAME art style as the attached reference image — same soft watercolour cartoon rendering, same outline thickness, same watercolour texture, same kawaii eye / pink cheek / small smile face treatment, same canvas resolution, same polish level. Flat 2D side-view illustration, body facing LEFT. Fully transparent PNG background.
+
+THE UNLOCK FEELING: A beautiful koi — deep red-orange, white patches, and a few bold black marks. Clean and charming. Unmistakably a koi.
+
+SILHOUETTE:
+• Plump rounded body — width-to-height ~1.8 : 1. Chubby and soft.
+• Head broad and soft with a small rounded mouth.
+• Two small short barbels at the mouth — subtle, not dramatic.
+• Dorsal fin gently raised along the back — soft and rounded.
+• TAIL FIN: a wide soft fan — both lobes rounded and spread open.
+• No visible scale texture — smooth and clean.
+
+PALETTE:
+• Base: deep red-orange — closer to vermillion than tangerine. A rich, warm red-orange (#D94F2A range). This is the real koi colour — deeper and more red than a typical cartoon orange.
+• Clean white patches — 2 to 3 simple organic brushstroke shapes on the body.
+• 2 to 3 small black markings — simple bold spots or short stripes on the orange areas only, not over the white.
+• Fins: translucent warm red-orange.
+• Outline: deep rust-brown.
+• NO highlight, NO sheen, NO reflection. Flat watercolour only.
+
+FACE:
+• Large kawaii eye, pink cheek circle, tiny upturned smile.
+
+GUARDRAILS:
+• The red-orange must be clearly deeper and more red than a standard cartoon orange. Think real koi pond colour, not tangerine.
+• Black markings present but restrained — 2 to 3 spots max. Cute, not busy.
+• Tail is a wide soft fan.
+• NO sheen or shine.
+• FLAT 2D cartoon — no 3D, no realism, no photograph.
+
+=== TEEN KOI ===
+A single kawaii cartoon teen koi fish, in the EXACT SAME art style as the attached reference image — same soft watercolour cartoon rendering, same outline thickness, same watercolour texture, same kawaii face treatment, same canvas resolution. Flat 2D side-view illustration, body facing LEFT. Fully transparent PNG background.
+
+Match the art style and colour treatment of the provided adult koi exactly — same rendering quality, same deep red-orange base colour. But follow the shape and pattern description below independently.
+
+THE UNLOCK FEELING: White patches are just appearing for the first time. No black yet. The tail is a simple fork. A young koi whose pattern is only beginning.
+
+SILHOUETTE:
+• Same plump rounded body as adult, slightly rounder.
+• Small rounded mouth, no barbels yet.
+• Dorsal fin small and low.
+• TAIL FIN: a simple soft fork — two narrow lobes. Not spread, not flowing. Structurally much simpler than the adult's wide fan.
+
+PALETTE:
+• Same deep red-orange as adult.
+• 1 to 2 small white patches — sparse, just beginning to appear.
+• NO black markings — those come with the adult.
+• Fins: translucent warm red-orange.
+• Outline: deep rust-brown.
+• NO highlight, NO sheen. Flat watercolour only.
+
+FACE:
+• Same kawaii treatment as adult.
+
+GUARDRAILS:
+• NO black markings — orange and white only.
+• Tail is a SIMPLE FORK — not a fan.
+• Only 1–2 white patches — sparse.
+• No barbels.
+• NO sheen or shine.
+• FLAT 2D cartoon — no 3D, no realism, no photograph.
+
+=== BABY KOI ===
+A single kawaii cartoon baby koi fish, in the EXACT SAME art style as the attached reference image — same soft watercolour cartoon rendering, same outline thickness, same watercolour texture, same kawaii face treatment, same canvas resolution. Flat 2D side-view illustration, body facing LEFT. Fully transparent PNG background.
+
+Match the art style and colour treatment of the provided teen koi exactly — same rendering quality, same deep red-orange base colour. But follow the shape and pattern description below independently.
+
+THE UNLOCK FEELING: Pure solid red-orange. No markings at all. A chubby little koi in one warm colour — simple and irresistible.
+
+SILHOUETTE:
+• Round chubby body — width-to-height ~1.3 : 1. Plump and soft, slightly longer than a circle but very round.
+• Head large and soft, tiny rounded mouth.
+• No barbels — completely absent.
+• Dorsal fin: a tiny soft nub on top.
+• TAIL FIN: a small soft rounded petal — not forked.
+• Smooth skin — no texture.
+
+PALETTE:
+• SOLID deep red-orange across the entire body — same colour as teen. No white patches, no black. Single colour only.
+• Fins: translucent warm red-orange.
+• Outline: deep rust-brown.
+• NO highlight, NO sheen. Flat watercolour only.
+
+FACE:
+• Same kawaii treatment — large eye, pink cheek, tiny upturned smile.
+
+GUARDRAILS:
+• ONE colour — solid red-orange. No markings whatsoever.
+• No barbels. Tail is a soft rounded petal.
+• Chubby koi shape — not a perfect circle.
+• NO sheen or shine.
+• FLAT 2D cartoon — no 3D, no realism, no photograph.
+
+=== ADULT BLOBFISH (different species, shows variety) ===
+A single kawaii cartoon adult blobfish, in the EXACT SAME art style as the attached reference image — same soft watercolour cartoon rendering, same outline thickness, same watercolour texture, same kawaii eye / pink cheek face treatment, same canvas resolution, same polish level. Flat 2D side-view illustration, body facing LEFT. Fully transparent PNG background.
+
+THE UNLOCK FEELING: The iconic blobfish — droopy nose, sad eyes, pink blob body. Instantly recognisable. Ugly-cute in the most charming way possible.
+
+SILHOUETTE:
+• Round soft blob body — slightly wider than tall. Gelatinous and squishy-looking.
+• THE DROOPY NOSE: a large soft fleshy bulge that droops downward from the front of the face — this is the blobfish's entire identity and must be prominent.
+• Cheeks soft and heavy, giving the face a jowly quality.
+• Two tiny stubby fins on the sides.
+• Small soft tail fin.
+
+PALETTE:
+• Soft muted pink-grey (#D4A5A0 range) — pale and matte.
+• Slightly paler on the underside.
+• Outline: deep grey-mauve.
+• NO highlight, NO sheen, NO reflection. Flat watercolour only.
+
+FACE:
+• Large kawaii eyes — bright with a white highlight dot, but with heavy soft eyelids giving a permanently drowsy/melancholy look.
+• Pink cheek circles — kawaii treatment applied to a sad face.
+• Tiny downturned or neutral mouth just above the drooping nose.
+
+GUARDRAILS:
+• The DROOPY NOSE must be large and prominent — this is the blobfish.
+• Eyes sad but kawaii — heavy-lidded, large, with highlight dot.
+• Body soft pink-grey blob.
+• NO sheen or shine.
+• FLAT 2D cartoon — no 3D, no realism, no photograph.
+
+=== END EXAMPLES ===
+
+When the user asks for a {stage} prompt for a {species}, write a single prompt for that stage that follows the template exactly, with species-specific silhouette details (research what makes that fish recognisable — e.g. seahorse curl, hammerhead's wide T-head, swordfish's bill, manta ray's flat triangular wings, octopus's eight tentacles). Use a real-life-accurate base colour with hex code. Pick the distinguishing features that MUST be present and put them in GUARDRAILS.
+
+Output ONLY the prompt — no preface, no closing remarks, no markdown.
+"""
+
+
+def _claude_suggest_prompt(species: str, stage: str) -> str:
+    """Call Anthropic's Messages API to draft a fresh image prompt."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(
+            400, "ANTHROPIC_API_KEY not configured on server")
+    body = {
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 2000,
+        "temperature": 0.7,
+        "system": _SUGGEST_SYSTEM,
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Write a {stage} prompt for {species}.",
+            },
+        ],
+    }
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    try:
+        r = requests.post(
+            f"{ANTHROPIC_BASE}/messages",
+            headers=headers, json=body, timeout=120,
+        )
+    except requests.RequestException as e:
+        raise HTTPException(502, f"Anthropic request failed: {e}")
+    if r.status_code != 200:
+        raise HTTPException(
+            502, f"Anthropic {r.status_code}: {r.text[:400]}")
+    j = r.json()
+    blocks = j.get("content") or []
+    text = ""
+    for b in blocks:
+        if b.get("type") == "text":
+            text += b.get("text", "")
+    text = text.strip()
+    if not text:
+        raise HTTPException(
+            502, f"Anthropic returned no text: {r.text[:200]}")
+    # Strip accidental code-fence wrappers if the model adds them.
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0]
+        text = text.strip()
+    return text
+
+
 # ----- Auth bridge -----------------------------------------------------------
 
 def _require_auth(request: Request) -> None:
@@ -251,6 +481,8 @@ async def fishgen_list(request: Request) -> JSONResponse:
         "stages": STAGES,
         "openai_configured": bool(OPENAI_API_KEY),
         "pixellab_configured": bool(PIXELLAB_SECRET),
+        "anthropic_configured": bool(ANTHROPIC_API_KEY),
+        "anthropic_model": ANTHROPIC_MODEL,
     })
 
 
@@ -279,6 +511,23 @@ async def fishgen_save_prompt(slug: str, stage: str, body: PromptBody,
     d = _stage_dir(slug, stage)
     (d / "prompt.txt").write_text(body.prompt)
     return JSONResponse({"ok": True})
+
+
+@router.post("/api/fishgen/{slug}/{stage}/suggest_prompt")
+async def fishgen_suggest_prompt(slug: str, stage: str,
+                                 request: Request) -> JSONResponse:
+    """Use Claude (Anthropic) to draft a fresh prompt for this species
+    + stage, following the established template + few-shot examples.
+    The result is returned but NOT auto-saved — the user reviews +
+    edits in the textarea, then saves manually."""
+    _require_auth(request)
+    if slug not in SLUG_TO_NAME:
+        raise HTTPException(404, f"unknown species: {slug}")
+    if stage not in STAGE_KEYS:
+        raise HTTPException(404, f"unknown stage: {stage}")
+    species_name = SLUG_TO_NAME[slug]
+    prompt = _claude_suggest_prompt(species_name, stage)
+    return JSONResponse({"prompt": prompt, "model": ANTHROPIC_MODEL})
 
 
 @router.get("/api/fishgen/{slug}/{stage}/image")

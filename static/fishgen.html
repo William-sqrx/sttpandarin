@@ -11,6 +11,7 @@
   <h1>Fish generator</h1>
   <div class="meta">
     <span id="openai-status" class="badge">OpenAI: …</span>
+    <span id="anthropic-status" class="badge">Claude: …</span>
     <span id="pixellab-status" class="badge">PixelLab: …</span>
     <a class="back" href="/">← back</a>
   </div>
@@ -41,8 +42,9 @@
       </div>
     </div>
     <div class="prompt-block" hidden>
-      <textarea class="prompt" rows="6" spellcheck="false"></textarea>
+      <textarea class="prompt" rows="8" spellcheck="false"></textarea>
       <div class="prompt-actions">
+        <button class="btn small suggest-prompt" type="button">Suggest with Claude</button>
         <button class="btn small reset-prompt" type="button">Reset to default</button>
         <button class="btn small save-prompt" type="button">Save prompt</button>
       </div>
