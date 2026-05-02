@@ -3,23 +3,78 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Chinesely TTS — Login</title>
+  <title>Chinesely — Login</title>
   <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .tabs { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 2px solid #e5e7eb; }
+    .tab-btn {
+      padding: 10px 24px;
+      font-size: 15px;
+      font-weight: 600;
+      background: none;
+      border: none;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -2px;
+      cursor: pointer;
+      color: #6b7280;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn.active { color: #111827; border-bottom-color: #111827; }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+  </style>
 </head>
 <body class="center">
-  <form method="post" action="/login" class="card narrow">
-    <h1>Chinesely TTS</h1>
-    <p class="muted">Enter the password to continue.</p>
-    <label>Password
-      <input type="password" name="password" required autofocus>
-    </label>
-    <button type="submit">Sign in</button>
-    <p id="err" class="err" hidden>Incorrect password.</p>
-  </form>
+  <div class="card narrow">
+    <div class="tabs">
+      <button class="tab-btn" id="tab-tts" type="button">TTS</button>
+      <button class="tab-btn" id="tab-fish" type="button">Fish</button>
+    </div>
+
+    <div class="tab-pane" id="pane-tts">
+      <form method="post" action="/login">
+        <h1>Chinesely TTS</h1>
+        <p class="muted">Enter the password to continue.</p>
+        <label>Password
+          <input type="password" name="password" required>
+        </label>
+        <button type="submit">Sign in</button>
+        <p id="err-tts" class="err" hidden>Incorrect password.</p>
+      </form>
+    </div>
+
+    <div class="tab-pane" id="pane-fish">
+      <form method="post" action="/fish-login">
+        <h1>Fish Studio</h1>
+        <p class="muted">Enter the password to continue.</p>
+        <label>Password
+          <input type="password" name="password" required>
+        </label>
+        <button type="submit">Sign in</button>
+        <p id="err-fish" class="err" hidden>Incorrect password.</p>
+      </form>
+    </div>
+  </div>
+
   <script>
-    if (new URLSearchParams(location.search).get("error") === "1") {
-      document.getElementById("err").hidden = false;
+    const params = new URLSearchParams(location.search);
+    const defaultTab = params.get("tab") === "fish" ? "fish" : "tts";
+    if (params.get("error") === "1") {
+      document.getElementById("err-" + defaultTab).hidden = false;
     }
+
+    function activate(tab) {
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+      document.getElementById("tab-" + tab).classList.add("active");
+      document.getElementById("pane-" + tab).classList.add("active");
+      document.querySelector("#pane-" + tab + " input[type=password]").focus();
+    }
+
+    document.getElementById("tab-tts").addEventListener("click", () => activate("tts"));
+    document.getElementById("tab-fish").addEventListener("click", () => activate("fish"));
+
+    activate(defaultTab);
   </script>
 </body>
 </html>

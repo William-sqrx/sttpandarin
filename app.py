@@ -43,8 +43,10 @@ from pinyin_util import annotate_with_pinyin, pinyin_options
 from tts import FEMALE_VOICES, MALE_VOICES, MODEL_DEFAULT, TTSError, build_segment, synthesize_piece_mp3
 
 APP_PASSWORD = os.getenv("APP_PASSWORD", "chinesely")
+FISH_PASSWORD = os.getenv("FISH_PASSWORD", "michelle")
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
 SESSION_COOKIE = "chinesely_session"
+FISH_SESSION_COOKIE = "fish_session"
 serializer = URLSafeSerializer(SESSION_SECRET, salt="auth")
 
 APP_DIR = Path(__file__).resolve().parent
@@ -69,6 +71,22 @@ def _is_authed(request: Request) -> bool:
 
 def _require_auth(request: Request) -> None:
     if not _is_authed(request):
+        raise HTTPException(status_code=401, detail="not authenticated")
+
+
+def _is_fish_authed(request: Request) -> bool:
+    token = request.cookies.get(FISH_SESSION_COOKIE)
+    if not token:
+        return False
+    try:
+        data = serializer.loads(token)
+    except BadSignature:
+        return False
+    return isinstance(data, dict) and data.get("fish") is True
+
+
+def _require_fish_auth(request: Request) -> None:
+    if not _is_fish_authed(request):
         raise HTTPException(status_code=401, detail="not authenticated")
 
 
@@ -137,6 +155,23 @@ async def login(password: str = Form(...)) -> Response:
 async def logout() -> Response:
     resp = RedirectResponse(url="/", status_code=303)
     resp.delete_cookie(SESSION_COOKIE)
+    return resp
+
+
+@app.post("/fish-login")
+async def fish_login(password: str = Form(...)) -> Response:
+    if password != FISH_PASSWORD:
+        return RedirectResponse(url="/?tab=fish&error=1", status_code=303)
+    token = serializer.dumps({"fish": True})
+    resp = RedirectResponse(url="/fishgen", status_code=303)
+    resp.set_cookie(
+        FISH_SESSION_COOKIE,
+        token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7,
+    )
     return resp
 
 

@@ -439,14 +439,12 @@ def _claude_suggest_prompt(species: str, stage: str) -> str:
 # ----- Auth bridge -----------------------------------------------------------
 
 def _require_auth(request: Request) -> None:
-    """Defer to app.py's auth helper. Imported at call time so both
-    modules can be imported in any order."""
-    from app import _require_auth as _ra  # noqa: WPS433
+    from app import _require_fish_auth as _ra  # noqa: WPS433
     _ra(request)
 
 
 def _is_authed(request: Request) -> bool:
-    from app import _is_authed as _ia  # noqa: WPS433
+    from app import _is_fish_authed as _ia  # noqa: WPS433
     return _ia(request)
 
 
@@ -458,7 +456,8 @@ router = APIRouter()
 @router.get("/fishgen", response_class=HTMLResponse)
 async def fishgen_page(request: Request) -> Response:
     if not _is_authed(request):
-        return FileResponse(STATIC_DIR / "login.html")
+        from fastapi.responses import RedirectResponse  # noqa: WPS433
+        return RedirectResponse("/?tab=fish")
     return FileResponse(STATIC_DIR / "fishgen.html")
 
 
