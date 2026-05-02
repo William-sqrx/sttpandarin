@@ -187,6 +187,7 @@ def _openai_text_to_image(prompt: str) -> bytes:
 
 
 def _openai_image_edit(prompt: str, ref_png: bytes) -> bytes:
+    """Edit endpoint — used for teen/baby (evolve from previous stage)."""
     if not OPENAI_API_KEY:
         raise HTTPException(400, "OPENAI_API_KEY not configured on server")
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
@@ -213,6 +214,39 @@ def _openai_image_edit(prompt: str, ref_png: bytes) -> bytes:
     if not payload or not payload[0].get("b64_json"):
         raise HTTPException(502, f"OpenAI returned no image: {r.text[:200]}")
     return base64.b64decode(payload[0]["b64_json"])
+
+
+def _openai_generate_with_style_ref(prompt: str, ref_png: bytes) -> bytes:
+    """Generations endpoint with image as style reference — mirrors what the
+    ChatGPT platform does when you attach an image and ask for a new image in
+    that style. The image is a soft visual anchor, NOT an edit base."""
+    if not OPENAI_API_KEY:
+        raise HTTPException(400, "OPENAI_API_KEY not configured on server")
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+    # Pass as "image" (singular) — same as the platform's attach button.
+    files = {"image": ("style_ref.png", ref_png, "image/png")}
+    data = {
+        "model": OPENAI_IMAGE_MODEL,
+        "prompt": prompt,
+        "n": "1",
+        "size": "1024x1024",
+        "background": "transparent",
+        "quality": "high",
+        "output_format": "png",
+    }
+    try:
+        r = requests.post(
+            f"{OPENAI_BASE}/images/generations",
+            headers=headers, data=data, files=files, timeout=300,
+        )
+    except requests.RequestException as e:
+        raise HTTPException(502, f"OpenAI request failed: {e}")
+    if r.status_code != 200:
+        raise HTTPException(502, f"OpenAI {r.status_code}: {r.text[:400]}")
+    result = r.json().get("data") or []
+    if not result or not result[0].get("b64_json"):
+        raise HTTPException(502, f"OpenAI returned no image: {r.text[:200]}")
+    return base64.b64decode(result[0]["b64_json"])
 
 
 # ----- Prompt suggester (LLM) ------------------------------------------------
@@ -616,10 +650,10 @@ async def fishgen_generate(slug: str, stage: str, body: GenerateBody,
 
     ref_stage = next((s["ref"] for s in STAGES if s["key"] == stage), None)
     if ref_stage is None:
-        # Adult: use global style reference if one has been uploaded, otherwise
-        # fall back to pure text-to-image.
+        # Adult: use generations+image[] (soft style reference) if uploaded,
+        # otherwise pure text-to-image. Never use the edit endpoint for adults.
         if STYLE_REF_PATH.exists():
-            png_bytes = _openai_image_edit(body.prompt, STYLE_REF_PATH.read_bytes())
+            png_bytes = _openai_generate_with_style_ref(body.prompt, STYLE_REF_PATH.read_bytes())
         else:
             png_bytes = _openai_text_to_image(body.prompt)
     else:
