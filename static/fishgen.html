@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fish Generator — Chinesely</title>
+<link rel="stylesheet" href="/static/fishgen.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Fish generator</h1>
+  <div class="meta">
+    <span id="openai-status" class="badge">OpenAI: …</span>
+    <span id="pixellab-status" class="badge">PixelLab: …</span>
+    <a class="back" href="/">← back</a>
+  </div>
+</header>
+
+<main>
+  <p class="legend">
+    Generate <strong>adult</strong> first (pure prompt). The
+    <strong>teen</strong> generation uses the saved adult image as a
+    style/colour reference. <strong>Baby</strong> uses the saved teen.
+    Each stage has its own editable prompt — click <em>Edit prompt</em>
+    on a cell to tune. After a still image looks good, click
+    <em>Animate</em> to render a swim-in-place sprite sheet.
+  </p>
+  <div id="grid" class="grid"></div>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+
+<template id="cell-template">
+  <div class="cell">
+    <div class="preview">
+      <img class="still" alt="" hidden>
+      <canvas class="sheet" hidden></canvas>
+      <div class="placeholder">no image</div>
+      <div class="overlay" hidden>
+        <span class="overlay-text">working…</span>
+      </div>
+    </div>
+    <div class="prompt-block" hidden>
+      <textarea class="prompt" rows="6" spellcheck="false"></textarea>
+      <div class="prompt-actions">
+        <button class="btn small reset-prompt" type="button">Reset to default</button>
+        <button class="btn small save-prompt" type="button">Save prompt</button>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn primary generate" type="button">Generate</button>
+      <button class="btn secondary animate" type="button" disabled>Animate</button>
+      <button class="btn ghost edit-prompt" type="button">Edit prompt</button>
+      <button class="btn danger small wipe" type="button" title="Delete saved image + sheet" hidden>×</button>
+    </div>
+    <div class="status" aria-live="polite"></div>
+  </div>
+</template>
+
+<script src="/static/fishgen.js"></script>
+</body>
+</html>
