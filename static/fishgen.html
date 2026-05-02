@@ -18,14 +18,16 @@
 </header>
 
 <main>
-  <p class="legend">
-    Generate <strong>adult</strong> first (pure prompt). The
-    <strong>teen</strong> generation uses the saved adult image as a
-    style/colour reference. <strong>Baby</strong> uses the saved teen.
-    Each stage has its own editable prompt — click <em>Edit prompt</em>
-    on a cell to tune. After a still image looks good, click
-    <em>Animate</em> to render a swim-in-place sprite sheet.
-  </p>
+  <div class="style-ref-bar">
+    <div class="style-ref-label">Style reference (adult)</div>
+    <div class="style-ref-slot" id="style-ref-slot">
+      <img id="style-ref-img" class="style-ref-thumb" hidden alt="style ref">
+      <span id="style-ref-empty" class="style-ref-empty">No reference — adults use text-to-image</span>
+    </div>
+    <label class="btn small" for="style-ref-input">Upload PNG</label>
+    <input type="file" id="style-ref-input" accept="image/png" style="display:none">
+    <button class="btn danger small" id="style-ref-clear" hidden>Remove</button>
+  </div>
   <div id="grid" class="grid"></div>
 </main>
 

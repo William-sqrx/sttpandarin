@@ -46,6 +46,8 @@ FG_DIR = APP_DIR / "fishgen"
 FG_DIR.mkdir(exist_ok=True)
 STATIC_DIR = APP_DIR / "static"
 
+STYLE_REF_PATH = FG_DIR / "style_ref.png"
+
 # ----- Stages + species ------------------------------------------------------
 
 # Three stages we generate, in dependency order. Each entry's `ref` is
@@ -220,18 +222,19 @@ def _openai_image_edit(prompt: str, ref_png: bytes) -> bytes:
 # stage chain; one blobfish adult adds variety so the model doesn't
 # overfit to "koi-shaped" results.
 _SUGGEST_SYSTEM = """\
-You write image-generation prompts for a series of kawaii cartoon fish illustrations. The artist will pass your prompt to gpt-image-1 to render the fish. You must follow the exact template, structure, and tone shown in the examples below — DO NOT add any prose around the prompt, DO NOT include markdown code fences, just output the prompt itself.
+You write image-generation prompts for a series of kawaii cartoon fish illustrations. The artist will pass your prompt to gpt-image-1, which will ALWAYS receive an attached reference image. You must follow the exact template, structure, and tone shown in the examples below — DO NOT add any prose around the prompt, DO NOT include markdown code fences, just output the prompt itself.
 
 ART STYLE (always): soft watercolour cartoon rendering, kawaii face (large eye, pink cheek circle, tiny smile), flat 2D side-view, body facing LEFT, fully transparent PNG background, no sheen, no 3D, no realism.
 
-THREE STAGES per species:
-- ADULT: full mature form. All distinguishing features present. Pure text-to-image, no reference image. The opening line describes the style requirements directly.
-- TEEN: a younger version of the adult. Simpler patterns, less developed fins, simpler tail. Opening line says "in the EXACT SAME art style as the attached reference image" and references the ADULT image as the source of truth for colour + rendering.
-- BABY: simplest form. Plain solid base colour, oversized head, tiny fins, no markings yet. References the TEEN image.
+THREE STAGES per species — every stage uses an attached reference image:
+- ADULT: full mature form. All distinguishing features present. The attached image is a global kawaii cartoon style reference. Opening line says "in the EXACT SAME art style as the attached reference image — same soft watercolour cartoon rendering, same outline thickness, same watercolour texture, same kawaii eye / pink cheek / small smile face treatment, same canvas resolution, same polish level."
+- TEEN: a younger version of the adult. The attached image is the saved ADULT sprite. Opening line says "in the EXACT SAME art style as the attached reference image" and a second paragraph explicitly references the adult sprite as the colour/style anchor. Simpler patterns, less developed fins, simpler tail.
+- BABY: simplest form. The attached image is the saved TEEN sprite. Opens the same way, second paragraph references the teen. Plain solid base colour, tiny fins, no markings yet.
 
 EVERY prompt MUST contain these sections, in this exact order, with these exact section headers:
 
-1. Opening paragraph (no header). For adult: describes the art style requirements directly. For teen / baby: opens with "A single kawaii cartoon {stage} {species}, in the EXACT SAME art style as the attached reference image — same soft watercolour cartoon rendering, same outline thickness, same watercolour texture, same kawaii face treatment, same canvas resolution. Flat 2D side-view illustration, body facing LEFT. Fully transparent PNG background." then a second paragraph that explicitly references the previous-stage sprite as the colour/style anchor.
+1. Opening paragraph (no header). Opens with "A single kawaii cartoon {stage} {species}, in the EXACT SAME art style as the attached reference image — same soft watercolour cartoon rendering, same outline thickness, same watercolour texture, same kawaii eye / pink cheek / small smile face treatment, same canvas resolution, same polish level. Flat 2D side-view illustration, body facing LEFT. Fully transparent PNG background."
+   For TEEN and BABY only: add a second sentence/paragraph explicitly naming the previous-stage sprite as the colour/rendering anchor (e.g. "Match the art style and colour treatment of the provided adult {species} exactly — same rendering quality, same [base colour]. But follow the shape and pattern description below independently.").
 
 2. THE UNLOCK FEELING: One short paragraph evoking what makes this stage's silhouette distinct. Use plain language, hint at the species' identity and what about it is "almost there" or "fully there" or "not there yet" depending on stage.
 
@@ -482,6 +485,7 @@ async def fishgen_list(request: Request) -> JSONResponse:
         "pixellab_configured": bool(PIXELLAB_SECRET),
         "anthropic_configured": bool(ANTHROPIC_API_KEY),
         "anthropic_model": ANTHROPIC_MODEL,
+        "has_style_ref": STYLE_REF_PATH.exists(),
     })
 
 
@@ -509,6 +513,36 @@ async def fishgen_save_prompt(slug: str, stage: str, body: PromptBody,
     _require_auth(request)
     d = _stage_dir(slug, stage)
     (d / "prompt.txt").write_text(body.prompt)
+    return JSONResponse({"ok": True})
+
+
+@router.get("/api/fishgen/style_ref")
+async def fishgen_style_ref_get(request: Request) -> Response:
+    _require_auth(request)
+    if not STYLE_REF_PATH.exists():
+        raise HTTPException(404, "no style reference image uploaded yet")
+    return Response(content=STYLE_REF_PATH.read_bytes(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@router.post("/api/fishgen/style_ref")
+async def fishgen_style_ref_upload(request: Request) -> JSONResponse:
+    from fastapi import UploadFile, File  # noqa: WPS433
+    _require_auth(request)
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "no image data")
+    STYLE_REF_PATH.write_bytes(body)
+    return JSONResponse({"ok": True})
+
+
+@router.delete("/api/fishgen/style_ref")
+async def fishgen_style_ref_delete(request: Request) -> JSONResponse:
+    _require_auth(request)
+    try:
+        STYLE_REF_PATH.unlink()
+    except FileNotFoundError:
+        pass
     return JSONResponse({"ok": True})
 
 
@@ -582,7 +616,12 @@ async def fishgen_generate(slug: str, stage: str, body: GenerateBody,
 
     ref_stage = next((s["ref"] for s in STAGES if s["key"] == stage), None)
     if ref_stage is None:
-        png_bytes = _openai_text_to_image(body.prompt)
+        # Adult: use global style reference if one has been uploaded, otherwise
+        # fall back to pure text-to-image.
+        if STYLE_REF_PATH.exists():
+            png_bytes = _openai_image_edit(body.prompt, STYLE_REF_PATH.read_bytes())
+        else:
+            png_bytes = _openai_text_to_image(body.prompt)
     else:
         ref_path = FG_DIR / slug / ref_stage / "image.png"
         if not ref_path.exists():

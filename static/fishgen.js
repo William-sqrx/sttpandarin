@@ -396,6 +396,49 @@
     el.textContent = `${label}: ${ok ? "configured" : "missing"}`;
   }
 
+  // ─── Style reference ─────────────────────────────────────────────────
+
+  function applyStyleRef(hasRef) {
+    const img   = $("#style-ref-img");
+    const empty = $("#style-ref-empty");
+    const clear = $("#style-ref-clear");
+    if (hasRef) {
+      img.src = `/api/fishgen/style_ref?t=${Date.now()}`;
+      img.hidden = false;
+      empty.hidden = true;
+      clear.hidden = false;
+    } else {
+      img.hidden = true;
+      empty.hidden = false;
+      clear.hidden = true;
+    }
+  }
+
+  $("#style-ref-input").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const buf = await file.arrayBuffer();
+    try {
+      await fetch("/api/fishgen/style_ref", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "image/png" },
+        body: buf,
+      });
+      applyStyleRef(true);
+      toast("Style reference saved — adults will use it as a style seed");
+    } catch (err) {
+      toast("Upload failed: " + err.message, "err");
+    }
+    e.target.value = "";
+  });
+
+  $("#style-ref-clear").addEventListener("click", async () => {
+    await api("DELETE", "/api/fishgen/style_ref");
+    applyStyleRef(false);
+    toast("Style reference removed — adults will use text-to-image");
+  });
+
   // ─── Boot ────────────────────────────────────────────────────────────
 
   async function boot() {
@@ -414,6 +457,7 @@
                    ? `Claude (${state.anthropicModel})`
                    : "Claude");
       paintBadge("pixellab-status", state.pixellabOk, "PixelLab");
+      applyStyleRef(list.has_style_ref);
       renderGrid();
       // After the DOM is in place, lazily load existing images.
       const cells = $$(".cell");
