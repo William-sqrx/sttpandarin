@@ -617,7 +617,7 @@ def _pl_headers() -> dict:
 def _pl_poll(job_id: str) -> dict:
     deadline = time.time() + 360
     while time.time() < deadline:
-        conn = http.client.HTTPSConnection("api.pixellab.ai")
+        conn = http.client.HTTPSConnection("api.pixellab.ai", timeout=30)
         conn.request("GET", f"/v2/background-jobs/{job_id}", headers=_pl_headers())
         res = conn.getresponse(); body = res.read(); conn.close()
         if res.status != 200:
@@ -632,13 +632,12 @@ def _pl_poll(job_id: str) -> dict:
     raise RuntimeError("PixelLab job timed out")
 
 
-def _generate_one(ref_png: bytes, action: str | None = None) -> tuple[bytes, int]:
+def _generate_one(ref_png: bytes, action: str | None = None) -> tuple[bytes, int, int]:
     if not _PIL_OK:
         raise RuntimeError("Pillow not installed — pip install Pillow")
 
     img = _PILImage.open(io.BytesIO(ref_png)).convert("RGBA")
-    if img.size != (_FS_FRAME, _FS_FRAME):
-        img = img.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
+    # Send at original resolution — PixelLab handles sizing internally.
 
     ref_pal = img.convert("RGB").quantize(colors=256, method=_PILImage.Quantize.MEDIANCUT)
 
@@ -660,7 +659,7 @@ def _generate_one(ref_png: bytes, action: str | None = None) -> tuple[bytes, int
             "action": action or _FS_ACTION, "frame_count": _FS_FRAMES,
             "no_background": True, "seed": random.randint(1, 2 ** 31 - 1),
         })
-        conn = http.client.HTTPSConnection("api.pixellab.ai")
+        conn = http.client.HTTPSConnection("api.pixellab.ai", timeout=30)
         conn.request("POST", "/v2/animate-with-text-v3", payload, _pl_headers())
         res = conn.getresponse(); body = res.read(); conn.close()
         if res.status not in (200, 202):
@@ -681,21 +680,22 @@ def _generate_one(ref_png: bytes, action: str | None = None) -> tuple[bytes, int
             if raw.startswith("data:"):
                 raw = raw.split(",", 1)[1]
             f = _PILImage.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
-            if f.size != (_FS_FRAME, _FS_FRAME):
-                f = f.resize((_FS_FRAME, _FS_FRAME), _PILImage.NEAREST)
             raw_frames.append(f)
         return [_lock(f) for f in raw_frames]
 
     locked = _call_pl(img)
 
-    # ref frame + 8 animation frames = 9 frames in a single row (2304×256)
-    all_frames = [img] + locked
+    # 8 animation frames + repeat of frame 0 as the closing frame so the
+    # loop is seamless (last frame == first frame).
+    all_frames = locked + [locked[0]]
     n = len(all_frames)
-    sheet = _PILImage.new("RGBA", (n * _FS_FRAME, _FS_FRAME), (0, 0, 0, 0))
+    # Use actual frame dimensions returned by PixelLab (not a hardcoded constant).
+    fW, fH = all_frames[0].size
+    sheet = _PILImage.new("RGBA", (n * fW, fH), (0, 0, 0, 0))
     for i, f in enumerate(all_frames):
-        sheet.paste(f, (i * _FS_FRAME, 0))
+        sheet.paste(f, (i * fW, 0))
     out = io.BytesIO(); sheet.save(out, format="PNG")
-    return out.getvalue(), n
+    return out.getvalue(), n, fW
 
 
 @dataclass
@@ -754,13 +754,13 @@ async def sprite_generate(request: Request, file: UploadFile = File(...)) -> JSO
         sj.status = "running"
         for _ in range(_FS_GENS):
             try:
-                sheet_bytes, n_frames = _generate_one(ref_bytes)
+                sheet_bytes, n_frames, frame_w = _generate_one(ref_bytes)
                 sid = uuid.uuid4().hex
                 d = SPRITES_DIR / sid
                 d.mkdir(parents=True, exist_ok=True)
                 (d / "sheet.png").write_bytes(sheet_bytes)
                 meta = {"id": sid, "name": fname, "cols": n_frames,
-                        "rows": 1, "total": n_frames, "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                        "rows": 1, "total": n_frames, "frameW": frame_w, "frameH": frame_w,
                         "created_at": time.time()}
                 (d / "meta.json").write_text(json.dumps(meta))
                 sj.completed.append(meta)
@@ -801,14 +801,14 @@ async def sprite_batch(request: Request,
         for fname, ref_bytes in payload:
             for _ in range(_FS_GENS):
                 try:
-                    sheet_bytes, n_frames = _generate_one(ref_bytes)
+                    sheet_bytes, n_frames, frame_w = _generate_one(ref_bytes)
                     sid = uuid.uuid4().hex
                     d = SPRITES_DIR / sid
                     d.mkdir(parents=True, exist_ok=True)
                     (d / "sheet.png").write_bytes(sheet_bytes)
                     meta = {"id": sid, "name": fname, "cols": n_frames,
                             "rows": 1, "total": n_frames,
-                            "frameW": _FS_FRAME, "frameH": _FS_FRAME,
+                            "frameW": frame_w, "frameH": frame_w,
                             "created_at": time.time()}
                     (d / "meta.json").write_text(json.dumps(meta))
                     sj.completed.append(meta)

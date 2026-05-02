@@ -422,21 +422,37 @@ Output ONLY the prompt — no preface, no closing remarks, no markdown.
 """
 
 
-def _claude_suggest_prompt(species: str, stage: str) -> str:
-    """Call Anthropic's Messages API to draft a fresh image prompt."""
+def _claude_suggest_prompt(species: str, stage: str,
+                           parent_prompt: str | None = None) -> str:
+    """Call Anthropic's Messages API to draft a fresh image prompt.
+
+    parent_prompt: the saved prompt from the previous stage (adult for teen,
+    teen for baby). When provided, Claude uses it as the concrete colour/
+    silhouette anchor instead of inventing one from scratch.
+    """
     if not ANTHROPIC_API_KEY:
         raise HTTPException(
             400, "ANTHROPIC_API_KEY not configured on server")
+
+    if parent_prompt:
+        parent_stage = "adult" if stage == "teen" else "teen"
+        user_content = (
+            f"Write a {stage} prompt for {species}.\n\n"
+            f"Here is the actual {parent_stage} prompt that was used — "
+            f"match its colours, outline style, and silhouette decisions "
+            f"exactly, then simplify for the {stage} stage:\n\n"
+            f"{parent_prompt}"
+        )
+    else:
+        user_content = f"Write a {stage} prompt for {species}."
+
     body = {
         "model": ANTHROPIC_MODEL,
         "max_tokens": 2000,
         "temperature": 0.7,
         "system": _SUGGEST_SYSTEM,
         "messages": [
-            {
-                "role": "user",
-                "content": f"Write a {stage} prompt for {species}.",
-            },
+            {"role": "user", "content": user_content},
         ],
     }
     headers = {
@@ -647,7 +663,16 @@ async def fishgen_suggest_prompt(slug: str, stage: str,
     if stage not in STAGE_KEYS:
         raise HTTPException(404, f"unknown stage: {stage}")
     species_name = SLUG_TO_NAME[slug]
-    prompt = _claude_suggest_prompt(species_name, stage)
+    parent_prompt: str | None = None
+    if stage == "teen":
+        p = FG_DIR / slug / "adult" / "prompt.txt"
+        if p.exists():
+            parent_prompt = p.read_text().strip() or None
+    elif stage == "baby":
+        p = FG_DIR / slug / "teen" / "prompt.txt"
+        if p.exists():
+            parent_prompt = p.read_text().strip() or None
+    prompt = _claude_suggest_prompt(species_name, stage, parent_prompt)
     return JSONResponse({"prompt": prompt, "model": ANTHROPIC_MODEL})
 
 
@@ -787,7 +812,6 @@ async def fishgen_animate(slug: str, stage: str, body: AnimateBody,
     from app import (  # noqa: WPS433
         PIXELLAB_SECRET,
         _generate_one,
-        _FS_FRAME,
     )
     if not PIXELLAB_SECRET:
         raise HTTPException(400, "PIXELLAB_SECRET not configured on server")
@@ -796,18 +820,18 @@ async def fishgen_animate(slug: str, stage: str, body: AnimateBody,
     if not ref_path.exists():
         raise HTTPException(400, "upload an image first")
     action = body.action.strip() or None
-    sheet_bytes, n_frames = _generate_one(ref_path.read_bytes(), action=action)
+    sheet_bytes, n_frames, frame_w = _generate_one(ref_path.read_bytes(), action=action)
     (d / "sheet.png").write_bytes(sheet_bytes)
     (d / "sheet_meta.json").write_text(json.dumps({
         "frames": n_frames,
-        "frameW": _FS_FRAME,
-        "frameH": _FS_FRAME,
+        "frameW": frame_w,
+        "frameH": frame_w,
         "created_at": time.time(),
     }))
     return JSONResponse({
         "ok": True,
         "frames": n_frames,
-        "frameW": _FS_FRAME,
-        "frameH": _FS_FRAME,
+        "frameW": frame_w,
+        "frameH": frame_w,
         "meta": _stage_meta(slug, stage),
     })
