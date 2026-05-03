@@ -39,7 +39,7 @@ function makeCell(name, sheet) {
 
   // Animate once the sheet image loads.
   const img = new Image();
-  img.src = `/api/fishanims/${encodeURIComponent(name)}/${sheet.idx}.png`;
+  img.src = `/api/fishanims/${encodeURIComponent(name)}/${sheet.idx}/sheet`;
   img.onload = () => animate(canvas, img, sheet);
   img.onerror = () => {
     const ctx = canvas.getContext('2d');

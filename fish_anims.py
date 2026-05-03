@@ -76,40 +76,28 @@ async def fishanims_list(request: Request) -> JSONResponse:
     return JSONResponse({"rows": rows, "count": len(rows)})
 
 
-@router.get("/api/fishanims/{name}/{idx}.png")
-async def fishanims_sheet(name: str, idx: str, request: Request) -> Response:
-    _require_auth(request)
+def _resolve(name: str, idx: str) -> Path:
     name = _safe_name(name)
     if not idx.isdigit():
         raise HTTPException(400, "bad idx")
     p = ANIMS_DIR / name / f"{idx}.png"
     if not p.exists():
         raise HTTPException(404, "not found")
+    return p
+
+
+@router.get("/api/fishanims/{name}/{idx}/sheet")
+async def fishanims_sheet(name: str, idx: str, request: Request) -> Response:
+    _require_auth(request)
+    p = _resolve(name, idx)
     return Response(content=p.read_bytes(), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
-
-
-@router.get("/api/fishanims/{name}/{idx}.json")
-async def fishanims_meta(name: str, idx: str, request: Request) -> JSONResponse:
-    _require_auth(request)
-    name = _safe_name(name)
-    if not idx.isdigit():
-        raise HTTPException(400, "bad idx")
-    p = ANIMS_DIR / name / f"{idx}.json"
-    if not p.exists():
-        raise HTTPException(404, "not found")
-    return JSONResponse(json.loads(p.read_text()))
 
 
 @router.get("/api/fishanims/{name}/{idx}/download")
 async def fishanims_download(name: str, idx: str, request: Request) -> Response:
     _require_auth(request)
-    name = _safe_name(name)
-    if not idx.isdigit():
-        raise HTTPException(400, "bad idx")
-    p = ANIMS_DIR / name / f"{idx}.png"
-    if not p.exists():
-        raise HTTPException(404, "not found")
+    p = _resolve(name, idx)
     return Response(
         content=p.read_bytes(),
         media_type="image/png",
