@@ -851,3 +851,6 @@ async def sprite_delete(sprite_id: str, request: Request) -> JSONResponse:
 import fishgen  # noqa: E402
 app.include_router(fishgen.router)
 
+import fish_anims  # noqa: E402
+app.include_router(fish_anims.router)
+
