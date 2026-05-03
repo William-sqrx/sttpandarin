@@ -7,6 +7,7 @@ restarting the server does not lose state.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -18,6 +19,19 @@ ANIMS_DIR = APP_DIR / "fish_anims"
 STATIC_DIR = APP_DIR / "static"
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _batch_key() -> str:
+    # Read each call so a Render env-var update is picked up without a restart.
+    return os.getenv("BATCH_UPLOAD_KEY", "")
+
+
+def _require_batch_key(request: Request) -> None:
+    expected = _batch_key()
+    if not expected:
+        raise HTTPException(503, "BATCH_UPLOAD_KEY not configured on server")
+    if request.headers.get("x-batch-key") != expected:
+        raise HTTPException(401, "bad batch key")
 
 
 def _require_auth(request: Request) -> None:
@@ -92,6 +106,38 @@ async def fishanims_sheet(name: str, idx: str, request: Request) -> Response:
     p = _resolve(name, idx)
     return Response(content=p.read_bytes(), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
+
+
+@router.post("/api/fishanims/{name}/{idx}/upload")
+async def fishanims_upload(name: str, idx: str, request: Request) -> JSONResponse:
+    """Accept a generated sprite sheet from the local batch script. Auth
+    via x-batch-key header (matches BATCH_UPLOAD_KEY env var). Writes
+    <name>/<idx>.png and <name>/<idx>.json to ANIMS_DIR.
+    """
+    _require_batch_key(request)
+    name = _safe_name(name)
+    if not idx.isdigit():
+        raise HTTPException(400, "bad idx")
+    species_dir = ANIMS_DIR / name
+    species_dir.mkdir(parents=True, exist_ok=True)
+
+    form = await request.form()
+    sheet = form.get("sheet")
+    meta_raw = form.get("meta")
+    if sheet is None or meta_raw is None:
+        raise HTTPException(400, "need 'sheet' (file) + 'meta' (json)")
+    sheet_bytes = await sheet.read()
+    if not sheet_bytes:
+        raise HTTPException(400, "empty sheet")
+    try:
+        meta = json.loads(meta_raw)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"bad meta json: {e}")
+
+    (species_dir / f"{idx}.png").write_bytes(sheet_bytes)
+    (species_dir / f"{idx}.json").write_text(json.dumps(meta))
+    return JSONResponse({"ok": True, "name": name, "idx": idx,
+                         "bytes": len(sheet_bytes)})
 
 
 @router.get("/api/fishanims/{name}/{idx}/download")
