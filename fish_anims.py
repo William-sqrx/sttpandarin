@@ -5,6 +5,9 @@ runs, so Render's free-tier dyno doesn't spin down mid-job.
 
 Sheets live on disk under webapp/fish_anims/. The gallery JS polls
 list + batch/status every 5s, so viewers also see progress live.
+
+All routes are unauthenticated — anyone with the URL can view, trigger,
+or stop the batch.
 """
 from __future__ import annotations
 
@@ -27,29 +30,6 @@ PER_FISH = 5
 KEEPALIVE_SECS = 60
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
-
-
-def _batch_key() -> str:
-    # Read each call so a Render env-var update is picked up without a restart.
-    return os.getenv("BATCH_UPLOAD_KEY", "")
-
-
-def _require_batch_key(request: Request) -> None:
-    expected = _batch_key()
-    if not expected:
-        raise HTTPException(503, "BATCH_UPLOAD_KEY not configured on server")
-    if request.headers.get("x-batch-key") != expected:
-        raise HTTPException(401, "bad batch key")
-
-
-def _require_auth(request: Request) -> None:
-    from app import _require_fish_auth as _ra  # noqa: WPS433
-    _ra(request)
-
-
-def _is_authed(request: Request) -> bool:
-    from app import _is_fish_authed as _ia  # noqa: WPS433
-    return _ia(request)
 
 
 def _safe_name(name: str) -> str:
@@ -185,15 +165,11 @@ router = APIRouter()
 
 @router.get("/fishanims", response_class=HTMLResponse)
 async def fishanims_page(request: Request) -> Response:
-    if not _is_authed(request):
-        from fastapi.responses import RedirectResponse  # noqa: WPS433
-        return RedirectResponse("/?tab=fish")
     return FileResponse(STATIC_DIR / "fishanims.html")
 
 
 @router.get("/api/fishanims/list")
 async def fishanims_list(request: Request) -> JSONResponse:
-    _require_auth(request)
     rows: list[dict] = []
     if ANIMS_DIR.is_dir():
         for sub in sorted(ANIMS_DIR.iterdir(), key=lambda p: p.name.lower()):
@@ -232,7 +208,6 @@ def _resolve(name: str, idx: str) -> Path:
 
 @router.get("/api/fishanims/{name}/{idx}/sheet")
 async def fishanims_sheet(name: str, idx: str, request: Request) -> Response:
-    _require_auth(request)
     p = _resolve(name, idx)
     return Response(content=p.read_bytes(), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
@@ -240,7 +215,6 @@ async def fishanims_sheet(name: str, idx: str, request: Request) -> Response:
 
 @router.post("/api/fishanims/batch/start")
 async def fishanims_batch_start(request: Request) -> JSONResponse:
-    _require_batch_key(request)
     if not os.getenv("PIXELLAB_SECRET"):
         raise HTTPException(503, "PIXELLAB_SECRET not configured on server")
     if not INPUT_DIR.is_dir():
@@ -269,14 +243,12 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
 
 @router.post("/api/fishanims/batch/stop")
 async def fishanims_batch_stop(request: Request) -> JSONResponse:
-    _require_batch_key(request)
     _stop_flag.set()
     return JSONResponse({"ok": True})
 
 
 @router.get("/api/fishanims/batch/status")
 async def fishanims_batch_status(request: Request) -> JSONResponse:
-    _require_auth(request)
     with _lock:
         return JSONResponse({
             "state": _status.state,
@@ -293,7 +265,6 @@ async def fishanims_batch_status(request: Request) -> JSONResponse:
 
 @router.get("/api/fishanims/{name}/{idx}/download")
 async def fishanims_download(name: str, idx: str, request: Request) -> Response:
-    _require_auth(request)
     p = _resolve(name, idx)
     return Response(
         content=p.read_bytes(),

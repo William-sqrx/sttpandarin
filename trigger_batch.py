@@ -3,9 +3,8 @@
 batch. The actual generation runs on the Render webapp; this script
 just sends one HTTP request and exits.
 
-Env vars (set in webapp/.env or your shell):
+Env var (set in webapp/.env or your shell):
   BATCH_UPLOAD_URL   prod base URL (e.g. https://chinesely-tts.onrender.com)
-  BATCH_UPLOAD_KEY   shared secret matching Render's BATCH_UPLOAD_KEY env var
 
 Usage:
   python3 trigger_batch.py [start|status|stop]   # default: start
@@ -29,11 +28,8 @@ except ImportError:
 
 def main() -> int:
     url = os.getenv("BATCH_UPLOAD_URL", "").strip().rstrip("/")
-    key = os.getenv("BATCH_UPLOAD_KEY", "").strip()
     if not url:
         sys.exit("set BATCH_UPLOAD_URL (e.g. https://chinesely-tts.onrender.com)")
-    if not key:
-        sys.exit("set BATCH_UPLOAD_KEY (matches Render BATCH_UPLOAD_KEY)")
 
     action = (sys.argv[1] if len(sys.argv) > 1 else "start").lower()
     if action not in ("start", "stop", "status"):
@@ -41,10 +37,7 @@ def main() -> int:
 
     endpoint = f"{url}/api/fishanims/batch/{action}"
     method = "POST" if action in ("start", "stop") else "GET"
-    req = urllib.request.Request(
-        endpoint, method=method,
-        headers={"x-batch-key": key},
-    )
+    req = urllib.request.Request(endpoint, method=method)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             body = r.read().decode()
