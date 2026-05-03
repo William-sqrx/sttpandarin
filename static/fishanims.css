@@ -44,6 +44,48 @@ main {
   margin: 0 auto;
   padding: 22px;
 }
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+.status-bar .state {
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--ink-2);
+}
+.status-bar .state[data-state="running"] {
+  background: #2a3a52;
+  color: #9ec3ff;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.status-bar .state[data-state="finished"] {
+  background: #1f3a2a;
+  color: var(--good);
+}
+.status-bar .state[data-state="error"] {
+  background: #3a2030;
+  color: #ff8aa8;
+}
+.status-bar .state[data-state="stopped"] {
+  background: #3a2f1f;
+  color: #f0c178;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
 .legend {
   color: var(--ink-2);
   margin: 0 0 18px 0;

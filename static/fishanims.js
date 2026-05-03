@@ -1,17 +1,39 @@
 // Fish animations gallery: rows = fish, 5 columns of animated sheets.
-// All state lives on disk via /api/fishanims/* — page is read-only.
+// Polls /api/fishanims/list + /api/fishanims/batch/status every 5s while
+// the batch is running, so progress is live and the prod dyno stays warm.
 
 const FRAME_MS = 100;
+const POLL_MS = 5000;
+
+let lastListKey = "";  // hash of (name + idx-list) so we re-render only on change
+
+async function fetchJSON(url) {
+  const r = await fetch(url, { credentials: 'same-origin' });
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  return r.json();
+}
+
+function listKey(rows) {
+  return rows.map(r => r.name + ':' + r.sheets.map(s => s.idx).join(',')).join('|');
+}
 
 async function loadList() {
-  const r = await fetch('/api/fishanims/list', { credentials: 'same-origin' });
-  if (!r.ok) {
+  try {
+    return await fetchJSON('/api/fishanims/list');
+  } catch (e) {
     document.getElementById('empty').hidden = false;
     document.getElementById('empty').textContent =
-      `Failed to load (${r.status}). Are you signed in?`;
+      `Failed to load (${e.message}). Are you signed in?`;
     return null;
   }
-  return r.json();
+}
+
+async function loadStatus() {
+  try {
+    return await fetchJSON('/api/fishanims/batch/status');
+  } catch {
+    return null;
+  }
 }
 
 function makeCell(name, sheet) {
@@ -37,7 +59,6 @@ function makeCell(name, sheet) {
   actions.appendChild(dl);
   cell.appendChild(actions);
 
-  // Animate once the sheet image loads.
   const img = new Image();
   img.src = `/api/fishanims/${encodeURIComponent(name)}/${sheet.idx}/sheet`;
   img.onload = () => animate(canvas, img, sheet);
@@ -53,9 +74,6 @@ function makeCell(name, sheet) {
 function animate(canvas, img, sheet) {
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
-  // Animation frames are the first (frames - 1); the last frame is a
-  // duplicate of frame 0 baked in by the generator for seamless loops,
-  // so playing all `frames` of them is fine.
   const total = sheet.frames || 1;
   let i = 0;
   let last = performance.now();
@@ -78,7 +96,7 @@ function animate(canvas, img, sheet) {
   requestAnimationFrame(tick);
 }
 
-function render(rows) {
+function renderGrid(rows) {
   const grid = document.getElementById('grid');
   grid.innerHTML = '';
   for (const row of rows) {
@@ -107,13 +125,51 @@ function render(rows) {
   }
 }
 
-(async () => {
-  const data = await loadList();
-  if (!data) return;
-  document.getElementById('count').textContent = `${data.count} fish`;
-  if (data.count === 0) {
-    document.getElementById('empty').hidden = false;
+function renderStatus(s) {
+  if (!s) return;
+  const bar = document.getElementById('status-bar');
+  const state = document.getElementById('status-state');
+  const prog = document.getElementById('status-progress');
+  const cur = document.getElementById('status-current');
+
+  if (s.state === 'idle') {
+    bar.hidden = true;
     return;
   }
-  render(data.rows);
-})();
+  bar.hidden = false;
+  state.textContent = s.state;
+  state.dataset.state = s.state;
+
+  const totalSeen = s.done + s.skipped + s.failed;
+  const tot = s.total || totalSeen;
+  prog.textContent = tot > 0
+    ? `${totalSeen}/${tot}  (done ${s.done} · skip ${s.skipped} · fail ${s.failed})`
+    : '';
+  cur.textContent = s.current ? `→ ${s.current}` : '';
+}
+
+async function tick() {
+  const [list, status] = await Promise.all([loadList(), loadStatus()]);
+  renderStatus(status);
+
+  if (list) {
+    document.getElementById('count').textContent = `${list.count} fish`;
+    if (list.count === 0 && (!status || status.state === 'idle')) {
+      document.getElementById('empty').hidden = false;
+    } else {
+      document.getElementById('empty').hidden = true;
+    }
+    const key = listKey(list.rows);
+    if (key !== lastListKey) {
+      lastListKey = key;
+      renderGrid(list.rows);
+    }
+  }
+
+  // Keep polling forever while batch is running OR has any sheets — so the
+  // user always sees latest state. When idle + 0 sheets, drop to slow poll.
+  const fast = status && (status.state === 'running');
+  setTimeout(tick, fast ? POLL_MS : POLL_MS * 4);
+}
+
+tick();
