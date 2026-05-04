@@ -60,6 +60,7 @@ _stop_flag = threading.Event()
 _thread: threading.Thread | None = None
 _migrated_once = False
 _skip_fish: set[str] = set()
+_regen_queue: list[str] = []  # FIFO of fish to fully regenerate (5 fresh sheets)
 
 
 def _ensure_migrated() -> None:
@@ -142,12 +143,101 @@ def _migrate_disk_to_mongo(col) -> int:
     return n
 
 
+def _generate_and_save_one(col, stem: str, idx: int, ref_bytes: bytes,
+                           label: str = "") -> bool:
+    """Generate one sprite sheet via PixelLab and persist to MongoDB.
+    Updates _status.done/_status.failed counters. Returns True on success.
+    Caller is responsible for skip-existing logic."""
+    from app import _generate_one  # noqa: WPS433
+
+    sheet_bytes = frames = frame_w = None
+    last_err: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            sheet_bytes, frames, frame_w = _generate_one(ref_bytes)
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            print(f"[fishanims] try {attempt} {stem}/{idx}{label}: {e}",
+                  flush=True)
+            if attempt < 2:
+                time.sleep(5)
+    if sheet_bytes is None:
+        with _lock:
+            _status.failed += 1
+        print(f"[fishanims] FAIL {stem}/{idx}{label}: {last_err}", flush=True)
+        return False
+
+    doc = {
+        "name": stem,
+        "idx": idx,
+        "sheet": Binary(sheet_bytes),
+        "frames": frames,
+        "frameW": frame_w,
+        "frameH": frame_w,
+        "created_at": datetime.now(timezone.utc),
+    }
+    for db_attempt in range(1, 7):  # ~5s, 10s, 20s, 40s, 60s, 60s
+        try:
+            col.update_one(
+                {"name": stem, "idx": idx},
+                {"$set": doc},
+                upsert=True,
+            )
+            if not col.find_one({"name": stem, "idx": idx}, {"_id": 1}):
+                raise RuntimeError("upsert returned ok but doc not found")
+            with _lock:
+                _status.done += 1
+            print(f"[fishanims] ok {stem}/{idx}{label} ({frames}f, "
+                  f"{len(sheet_bytes)//1024}KB → mongo)", flush=True)
+            return True
+        except Exception as e:  # noqa: BLE001
+            print(f"[fishanims] mongo write {db_attempt} {stem}/{idx}{label}: {e}",
+                  flush=True)
+            if db_attempt < 6:
+                backoff = min(60, 5 * (2 ** (db_attempt - 1)))
+                time.sleep(backoff)
+    with _lock:
+        _status.failed += 1
+    print(f"[fishanims] PERMANENT MONGO WRITE FAIL {stem}/{idx}{label} "
+          f"(sheet bytes lost — re-trigger to regenerate)", flush=True)
+    return False
+
+
+def _drain_regen_queue(col, pngs) -> None:
+    """Process every pending regen request: wipe the fish's existing sheets
+    and regenerate all 5. Bumps _status.total so the progress bar accounts
+    for the extra work. Honors stop flag between sheets."""
+    while True:
+        with _lock:
+            if not _regen_queue or _stop_flag.is_set():
+                return
+            stem = _regen_queue.pop(0)
+        png = next((p for p in pngs if p.stem == stem), None)
+        if png is None:
+            print(f"[fishanims] regen: unknown fish '{stem}', skipped",
+                  flush=True)
+            continue
+        deleted = col.delete_many({"name": stem}).deleted_count
+        print(f"[fishanims] regen: wiping {stem} ({deleted} existing) → 5 fresh",
+              flush=True)
+        with _lock:
+            _status.total += PER_FISH
+        ref_bytes = png.read_bytes()
+        for idx in range(1, PER_FISH + 1):
+            if _stop_flag.is_set():
+                return
+            with _lock:
+                _status.current = f"{stem} {idx}/{PER_FISH} (regen)"
+            _generate_and_save_one(col, stem, idx, ref_bytes, label=" regen")
+
+
 def _batch_loop() -> None:
     keepalive_stop = threading.Event()
     keepalive_thread = threading.Thread(
         target=_keepalive_loop, args=(keepalive_stop,), daemon=True)
     try:
-        from app import _generate_one  # noqa: WPS433
+        from app import _generate_one  # noqa: WPS433,F401
         col = fish_anims_col()
         _ensure_migrated()
 
@@ -187,69 +277,16 @@ def _batch_loop() -> None:
                         _status.skipped += 1
                     continue
 
-                sheet_bytes = frames = frame_w = None
-                last_err: Exception | None = None
-                for attempt in (1, 2):
-                    try:
-                        sheet_bytes, frames, frame_w = _generate_one(ref_bytes)
-                        break
-                    except Exception as e:  # noqa: BLE001
-                        last_err = e
-                        print(f"[fishanims] try {attempt} {stem}/{idx}: {e}",
-                              flush=True)
-                        if attempt < 2:
-                            time.sleep(5)
-                if sheet_bytes is None:
-                    with _lock:
-                        _status.failed += 1
-                    print(f"[fishanims] FAIL {stem}/{idx}: {last_err}", flush=True)
-                    continue
+                _generate_and_save_one(col, stem, idx, ref_bytes)
+                # After every sheet save, drain any regen requests that
+                # arrived during this sheet's generation. This makes regen
+                # take effect "as soon as the in-flight sheet finishes",
+                # rather than waiting until the entire batch is done.
+                _drain_regen_queue(col, pngs)
 
-                # Persist to MongoDB with aggressive retry — we already paid
-                # PixelLab for these bytes, so do everything possible to land
-                # them in the DB before declaring failure.
-                doc = {
-                    "name": stem,
-                    "idx": idx,
-                    "sheet": Binary(sheet_bytes),
-                    "frames": frames,
-                    "frameW": frame_w,
-                    "frameH": frame_w,
-                    "created_at": datetime.now(timezone.utc),
-                }
-                wrote = False
-                for db_attempt in range(1, 7):  # ~5s, 10s, 20s, 40s, 60s, 60s
-                    try:
-                        col.update_one(
-                            {"name": stem, "idx": idx},
-                            {"$set": doc},
-                            upsert=True,
-                        )
-                        # Read-back verification: confirm the doc actually
-                        # made it. update_one acks before durability on some
-                        # configs, so a tiny existence check is cheap insurance.
-                        if not col.find_one({"name": stem, "idx": idx}, {"_id": 1}):
-                            raise RuntimeError("upsert returned ok but doc not found")
-                        wrote = True
-                        break
-                    except Exception as e:  # noqa: BLE001
-                        print(f"[fishanims] mongo write {db_attempt} {stem}/{idx}: {e}",
-                              flush=True)
-                        if db_attempt < 6:
-                            backoff = min(60, 5 * (2 ** (db_attempt - 1)))
-                            time.sleep(backoff)
-                if not wrote:
-                    with _lock:
-                        _status.failed += 1
-                    print(f"[fishanims] PERMANENT MONGO WRITE FAIL {stem}/{idx} "
-                          f"(sheet bytes lost — re-trigger to regenerate)",
-                          flush=True)
-                    continue
-
-                with _lock:
-                    _status.done += 1
-                print(f"[fishanims] ok {stem}/{idx} ({frames}f, "
-                      f"{len(sheet_bytes)//1024}KB → mongo)", flush=True)
+        # End-of-batch sweep — picks up regen requests issued for fish the
+        # main loop has already finished with.
+        _drain_regen_queue(col, pngs)
 
         with _lock:
             _status.state = "stopped" if _stop_flag.is_set() else "finished"
@@ -345,6 +382,7 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
     _stop_flag.clear()
     with _lock:
         _skip_fish.clear()
+        _regen_queue.clear()
     _thread = threading.Thread(target=_batch_loop, daemon=True)
     _thread.start()
     return JSONResponse({"ok": True, "state": "running"})
@@ -367,6 +405,19 @@ async def fishanims_batch_skip(name: str, request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "skipped": name})
 
 
+@router.post("/api/fishanims/batch/regen/{name}")
+async def fishanims_batch_regen(name: str, request: Request) -> JSONResponse:
+    """Queue a fish for full regeneration: after the in-flight sheet finishes,
+    the worker wipes all 5 sheets for this fish from MongoDB and generates
+    5 fresh ones. _status.total is bumped so the progress bar accounts for
+    the extra work. Idempotent — re-queuing an already-pending fish is a no-op."""
+    name = _safe_name(name)
+    with _lock:
+        if name not in _regen_queue:
+            _regen_queue.append(name)
+    return JSONResponse({"ok": True, "queued": name})
+
+
 @router.get("/api/fishanims/batch/status")
 async def fishanims_batch_status(request: Request) -> JSONResponse:
     with _lock:
@@ -381,6 +432,7 @@ async def fishanims_batch_status(request: Request) -> JSONResponse:
             "started_at": _status.started_at,
             "finished_at": _status.finished_at,
             "skipped_fish": sorted(_skip_fish),
+            "regen_queue": list(_regen_queue),
         })
 
 
