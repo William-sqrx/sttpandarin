@@ -168,6 +168,11 @@ async def fishanims_page(request: Request) -> Response:
     return FileResponse(STATIC_DIR / "fishanims.html")
 
 
+@router.get("/spriteviewer", response_class=HTMLResponse)
+async def spriteviewer_page(request: Request) -> Response:
+    return FileResponse(STATIC_DIR / "spriteviewer.html")
+
+
 @router.get("/api/fishanims/list")
 async def fishanims_list(request: Request) -> JSONResponse:
     rows: list[dict] = []

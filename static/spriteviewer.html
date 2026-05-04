@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sprite Viewer — Chinesely</title>
+<link rel="stylesheet" href="/static/spriteviewer.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Sprite viewer</h1>
+  <div class="meta">
+    <a class="back" href="/fishanims">← gallery</a>
+    <a class="back" href="/">home</a>
+  </div>
+</header>
+
+<main>
+  <div id="dropzone" class="upload-zone">
+    <input type="file" id="file" accept="image/png,image/*" hidden>
+    <button id="pick" type="button">Pick PNG</button>
+    <p class="hint">or drag &amp; drop a horizontal sprite sheet here</p>
+  </div>
+
+  <div id="info" class="info" hidden></div>
+
+  <div class="canvas-wrap">
+    <canvas id="canvas" width="256" height="256"></canvas>
+  </div>
+
+  <div id="controls" class="controls" hidden>
+    <label>FPS <input type="range" id="fps" min="1" max="30" value="10"></label>
+    <span id="fps-val">10</span>
+    <label>Scale <input type="range" id="scale" min="1" max="6" step="1" value="2"></label>
+    <span id="scale-val">2×</span>
+  </div>
+</main>
+
+<script src="/static/spriteviewer.js"></script>
+</body>
+</html>

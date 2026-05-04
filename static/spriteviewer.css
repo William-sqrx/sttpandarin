@@ -1,0 +1,110 @@
+:root {
+  --bg: #0e1014;
+  --panel: #181b22;
+  --panel-2: #20242d;
+  --line: #2a2f3a;
+  --ink: #e6e9ef;
+  --ink-2: #aab2c0;
+  --accent: #9aa6ff;
+  --accent-2: #7b86ff;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.45 ui-sans-serif, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 22px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.topbar h1 { margin: 0; font-size: 18px; font-weight: 600; }
+.topbar .meta { display: flex; gap: 14px; }
+.back { color: var(--accent); text-decoration: none; font-size: 13px; }
+.back:hover { color: var(--accent-2); }
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: center;
+}
+
+.upload-zone {
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  padding: 30px 24px;
+  text-align: center;
+  width: 100%;
+  transition: border-color 0.15s, background 0.15s;
+}
+.upload-zone.hover {
+  border-color: var(--accent);
+  background: rgba(154, 166, 255, 0.06);
+}
+.upload-zone button {
+  background: var(--accent);
+  color: #0a0c10;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.upload-zone button:hover { background: var(--accent-2); }
+.upload-zone .hint {
+  color: var(--ink-2);
+  margin: 14px 0 0 0;
+  font-size: 13px;
+}
+
+.info {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.3px;
+}
+
+.canvas-wrap {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+}
+.canvas-wrap canvas {
+  display: block;
+  image-rendering: pixelated;
+  background: #0a0c10;
+  border-radius: 6px;
+}
+
+.controls {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  color: var(--ink-2);
+  font-size: 13px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.controls input[type=range] {
+  width: 180px;
+  accent-color: var(--accent);
+}
