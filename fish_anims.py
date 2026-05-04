@@ -205,19 +205,47 @@ def _batch_loop() -> None:
                     print(f"[fishanims] FAIL {stem}/{idx}: {last_err}", flush=True)
                     continue
 
-                col.update_one(
-                    {"name": stem, "idx": idx},
-                    {"$set": {
-                        "name": stem,
-                        "idx": idx,
-                        "sheet": Binary(sheet_bytes),
-                        "frames": frames,
-                        "frameW": frame_w,
-                        "frameH": frame_w,
-                        "created_at": datetime.now(timezone.utc),
-                    }},
-                    upsert=True,
-                )
+                # Persist to MongoDB with aggressive retry — we already paid
+                # PixelLab for these bytes, so do everything possible to land
+                # them in the DB before declaring failure.
+                doc = {
+                    "name": stem,
+                    "idx": idx,
+                    "sheet": Binary(sheet_bytes),
+                    "frames": frames,
+                    "frameW": frame_w,
+                    "frameH": frame_w,
+                    "created_at": datetime.now(timezone.utc),
+                }
+                wrote = False
+                for db_attempt in range(1, 7):  # ~5s, 10s, 20s, 40s, 60s, 60s
+                    try:
+                        col.update_one(
+                            {"name": stem, "idx": idx},
+                            {"$set": doc},
+                            upsert=True,
+                        )
+                        # Read-back verification: confirm the doc actually
+                        # made it. update_one acks before durability on some
+                        # configs, so a tiny existence check is cheap insurance.
+                        if not col.find_one({"name": stem, "idx": idx}, {"_id": 1}):
+                            raise RuntimeError("upsert returned ok but doc not found")
+                        wrote = True
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[fishanims] mongo write {db_attempt} {stem}/{idx}: {e}",
+                              flush=True)
+                        if db_attempt < 6:
+                            backoff = min(60, 5 * (2 ** (db_attempt - 1)))
+                            time.sleep(backoff)
+                if not wrote:
+                    with _lock:
+                        _status.failed += 1
+                    print(f"[fishanims] PERMANENT MONGO WRITE FAIL {stem}/{idx} "
+                          f"(sheet bytes lost — re-trigger to regenerate)",
+                          flush=True)
+                    continue
+
                 with _lock:
                     _status.done += 1
                 print(f"[fishanims] ok {stem}/{idx} ({frames}f, "
