@@ -64,6 +64,7 @@ let batchRunning = false;
 const rowEls = new Map();  // species name → row DOM element (so we can update
                             // .generating class without re-rendering the grid)
 let lastCurrentStem = null;
+const revealedRows = new Set();  // names whose canvases are currently animating
 
 async function fetchJSON(url) {
   const r = await fetch(url, { credentials: 'same-origin' });
@@ -143,9 +144,20 @@ function makeCell(name, sheet) {
   actions.appendChild(dl);
   cell.appendChild(actions);
 
+  // Default behavior: draw frame 0 as a static preview. Only animate when
+  // the row's Reveal button is toggled on (revealedRows.has(name)). This
+  // keeps the page responsive when the gallery has many rows.
   const img = new Image();
   img.src = `/api/fishanims/${encodeURIComponent(name)}/${sheet.idx}/sheet`;
-  img.onload = () => animate(canvas, img, sheet);
+  img.onload = () => {
+    canvas._img = img;
+    canvas._sheet = sheet;
+    if (revealedRows.has(name)) {
+      startAnimate(canvas, img, sheet);
+    } else {
+      drawFrame0(canvas, img, sheet);
+    }
+  };
   img.onerror = () => {
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#3a2030';
@@ -155,14 +167,27 @@ function makeCell(name, sheet) {
   return cell;
 }
 
-function animate(canvas, img, sheet) {
+function drawFrame0(canvas, img, sheet) {
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(
+    img,
+    0, 0, sheet.frameW, sheet.frameH,
+    0, 0, canvas.width, canvas.height,
+  );
+}
+
+function startAnimate(canvas, img, sheet) {
+  if (canvas._animating) return;
+  canvas._animating = true;
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   const total = sheet.frames || 1;
   let i = 0;
   let last = performance.now();
   const tick = (now) => {
-    if (!canvas.isConnected) return;
+    if (!canvas.isConnected || !canvas._animating) return;
     if (now - last >= FRAME_MS) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(
@@ -178,6 +203,31 @@ function animate(canvas, img, sheet) {
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+}
+
+function stopAnimate(canvas) {
+  canvas._animating = false;
+  if (canvas._img && canvas._sheet) {
+    drawFrame0(canvas, canvas._img, canvas._sheet);
+  }
+}
+
+function toggleReveal(name, rowEl) {
+  const wasRevealed = revealedRows.has(name);
+  if (wasRevealed) {
+    revealedRows.delete(name);
+    for (const c of rowEl.querySelectorAll('canvas')) stopAnimate(c);
+  } else {
+    revealedRows.add(name);
+    for (const c of rowEl.querySelectorAll('canvas')) {
+      if (c._img && c._sheet) startAnimate(c, c._img, c._sheet);
+    }
+  }
+  const btn = rowEl.querySelector('.reveal-btn');
+  if (btn) {
+    btn.textContent = wasRevealed ? '▶ reveal' : '⏸ hide';
+    btn.classList.toggle('revealed', !wasRevealed);
+  }
 }
 
 async function skipFish(name, button) {
@@ -285,6 +335,22 @@ function renderGrid(rows) {
       skipBtn.addEventListener('click', () => skipFish(row.name, skipBtn));
     }
     btnRow.appendChild(skipBtn);
+
+    // Reveal button — toggles per-row animation. Default is static (frame 0)
+    // so the page stays smooth even with 30+ rows.
+    const revealBtn = document.createElement('button');
+    revealBtn.type = 'button';
+    revealBtn.className = 'reveal-btn';
+    if (row.sheets.length === 0) {
+      revealBtn.textContent = '—';
+      revealBtn.disabled = true;
+    } else {
+      const isRevealed = revealedRows.has(row.name);
+      revealBtn.textContent = isRevealed ? '⏸ hide' : '▶ reveal';
+      if (isRevealed) revealBtn.classList.add('revealed');
+      revealBtn.addEventListener('click', () => toggleReveal(row.name, div));
+    }
+    btnRow.appendChild(revealBtn);
 
     // Regen button — only for fish that have at least 1 sheet and the
     // batch is running (regen is processed by the running worker).
