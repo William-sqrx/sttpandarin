@@ -1,29 +1,30 @@
 """Fish animations gallery. Generation runs in a background thread on
-the prod server (kicked off by the local trigger_batch.py). A
-keepalive pinger fires the public URL every minute while the batch
-runs, so Render's free-tier dyno doesn't spin down mid-job.
+the prod server (kicked off by trigger_batch.py). Sheets are stored in
+MongoDB so they survive Render redeploys + dyno restarts.
 
-Sheets live on disk under webapp/fish_anims/. The gallery JS polls
-list + batch/status every 5s, so viewers also see progress live.
+A keepalive pinger fires the public URL every minute while the batch
+runs, so the free-tier dyno doesn't spin down mid-job.
 
 All routes are unauthenticated — anyone with the URL can view, trigger,
 or stop the batch.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
+from bson import Binary
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
+from db import fish_anims_col
+
 APP_DIR = Path(__file__).resolve().parent
-ANIMS_DIR = APP_DIR / "fish_anims"
 STATIC_DIR = APP_DIR / "static"
 INPUT_DIR = APP_DIR / "Chinesely Fish (256)"
 PER_FISH = 5
@@ -57,13 +58,28 @@ _status = _BatchStatus()
 _lock = threading.Lock()
 _stop_flag = threading.Event()
 _thread: threading.Thread | None = None
+_migrated_once = False
+_skip_fish: set[str] = set()
+
+
+def _ensure_migrated() -> None:
+    """Idempotent disk → MongoDB migration of any sheets committed to git
+    before the storage switch. Runs at most once per process lifetime."""
+    global _migrated_once
+    if _migrated_once:
+        return
+    try:
+        _migrate_disk_to_mongo(fish_anims_col())
+    except Exception as e:  # noqa: BLE001
+        print(f"[fishanims] migrate skipped: {e}", flush=True)
+    _migrated_once = True
 
 
 def _keepalive_loop(stop_event: threading.Event) -> None:
     """Hit the public URL every minute so Render's dyno doesn't spin down.
     Free-tier inactivity is measured by external HTTP traffic, so we go
     out → internet → load balancer → back into the container."""
-    import requests  # available via app's deps
+    import requests
 
     url = os.getenv("RENDER_EXTERNAL_URL", "").strip()
     if not url:
@@ -80,12 +96,60 @@ def _keepalive_loop(stop_event: threading.Event) -> None:
             time.sleep(1)
 
 
+def _migrate_disk_to_mongo(col) -> int:
+    """One-shot import of any local fish_anims/<species>/<idx>.png+.json into
+    MongoDB. Idempotent — existing docs are skipped. Returns count migrated.
+    Lets us preserve sheets that were committed to git before the MongoDB
+    switch so we don't pay PixelLab to regenerate them."""
+    import json
+    legacy = APP_DIR / "fish_anims"
+    if not legacy.is_dir():
+        return 0
+    n = 0
+    for species_dir in legacy.iterdir():
+        if not species_dir.is_dir():
+            continue
+        for png_path in species_dir.glob("*.png"):
+            if not png_path.stem.isdigit():
+                continue
+            idx = int(png_path.stem)
+            meta_path = png_path.with_suffix(".json")
+            if not meta_path.exists():
+                continue
+            if col.find_one({"name": species_dir.name, "idx": idx}, {"_id": 1}):
+                continue
+            try:
+                meta = json.loads(meta_path.read_text())
+                col.update_one(
+                    {"name": species_dir.name, "idx": idx},
+                    {"$set": {
+                        "name": species_dir.name,
+                        "idx": idx,
+                        "sheet": Binary(png_path.read_bytes()),
+                        "frames": meta.get("frames", 1),
+                        "frameW": meta.get("frameW", 256),
+                        "frameH": meta.get("frameH", 256),
+                        "created_at": datetime.now(timezone.utc),
+                    }},
+                    upsert=True,
+                )
+                n += 1
+                print(f"[fishanims] migrated {species_dir.name}/{idx} → mongo",
+                      flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[fishanims] migrate FAIL {species_dir.name}/{idx}: {e}",
+                      flush=True)
+    return n
+
+
 def _batch_loop() -> None:
     keepalive_stop = threading.Event()
     keepalive_thread = threading.Thread(
         target=_keepalive_loop, args=(keepalive_stop,), daemon=True)
     try:
         from app import _generate_one  # noqa: WPS433
+        col = fish_anims_col()
+        _ensure_migrated()
 
         if not INPUT_DIR.is_dir():
             with _lock:
@@ -105,20 +169,24 @@ def _batch_loop() -> None:
             if _stop_flag.is_set():
                 break
             stem = png.stem
-            species_dir = ANIMS_DIR / stem
-            species_dir.mkdir(parents=True, exist_ok=True)
             ref_bytes = png.read_bytes()
             for idx in range(1, PER_FISH + 1):
                 if _stop_flag.is_set():
                     break
-                sheet_path = species_dir / f"{idx}.png"
-                meta_path = species_dir / f"{idx}.json"
                 with _lock:
+                    if stem in _skip_fish:
+                        # Bump remaining slots into the skipped counter so
+                        # the progress bar reaches `total` even when fish
+                        # are short-circuited mid-row.
+                        _status.skipped += (PER_FISH - idx + 1)
+                        break
                     _status.current = f"{stem} {idx}/{PER_FISH}"
-                if sheet_path.exists() and meta_path.exists():
+
+                if col.find_one({"name": stem, "idx": idx}, {"_id": 1}):
                     with _lock:
                         _status.skipped += 1
                     continue
+
                 sheet_bytes = frames = frame_w = None
                 last_err: Exception | None = None
                 for attempt in (1, 2):
@@ -136,16 +204,24 @@ def _batch_loop() -> None:
                         _status.failed += 1
                     print(f"[fishanims] FAIL {stem}/{idx}: {last_err}", flush=True)
                     continue
-                sheet_path.write_bytes(sheet_bytes)
-                meta_path.write_text(json.dumps({
-                    "frames": frames,
-                    "frameW": frame_w,
-                    "frameH": frame_w,
-                    "created_at": time.time(),
-                }))
+
+                col.update_one(
+                    {"name": stem, "idx": idx},
+                    {"$set": {
+                        "name": stem,
+                        "idx": idx,
+                        "sheet": Binary(sheet_bytes),
+                        "frames": frames,
+                        "frameW": frame_w,
+                        "frameH": frame_w,
+                        "created_at": datetime.now(timezone.utc),
+                    }},
+                    upsert=True,
+                )
                 with _lock:
                     _status.done += 1
-                print(f"[fishanims] ok {stem}/{idx} ({frames}f)", flush=True)
+                print(f"[fishanims] ok {stem}/{idx} ({frames}f, "
+                      f"{len(sheet_bytes)//1024}KB → mongo)", flush=True)
 
         with _lock:
             _status.state = "stopped" if _stop_flag.is_set() else "finished"
@@ -175,46 +251,47 @@ async def spriteviewer_page(request: Request) -> Response:
 
 @router.get("/api/fishanims/list")
 async def fishanims_list(request: Request) -> JSONResponse:
-    rows: list[dict] = []
-    if ANIMS_DIR.is_dir():
-        for sub in sorted(ANIMS_DIR.iterdir(), key=lambda p: p.name.lower()):
-            if not sub.is_dir():
-                continue
-            sheets: list[dict] = []
-            for meta_path in sorted(sub.glob("*.json"), key=lambda p: int(p.stem) if p.stem.isdigit() else 0):
-                idx = meta_path.stem
-                sheet_path = sub / f"{idx}.png"
-                if not sheet_path.exists():
-                    continue
-                try:
-                    meta = json.loads(meta_path.read_text())
-                except Exception:  # noqa: BLE001
-                    continue
-                sheets.append({
-                    "idx": idx,
-                    "frames": meta.get("frames", 1),
-                    "frameW": meta.get("frameW", 256),
-                    "frameH": meta.get("frameH", 256),
-                })
-            if sheets:
-                rows.append({"name": sub.name, "sheets": sheets})
-    return JSONResponse({"rows": rows, "count": len(rows)})
+    try:
+        _ensure_migrated()
+        col = fish_anims_col()
+        cur = col.find(
+            {},
+            {"name": 1, "idx": 1, "frames": 1, "frameW": 1, "frameH": 1},
+        ).sort([("name", 1), ("idx", 1)])
+
+        rows_map: dict[str, list[dict]] = {}
+        for d in cur:
+            rows_map.setdefault(d["name"], []).append({
+                "idx": str(d["idx"]),
+                "frames": d.get("frames", 1),
+                "frameW": d.get("frameW", 256),
+                "frameH": d.get("frameH", 256),
+            })
+        rows = [
+            {"name": n, "sheets": s}
+            for n, s in sorted(rows_map.items(), key=lambda kv: kv[0].lower())
+        ]
+        return JSONResponse({"rows": rows, "count": len(rows)})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"rows": [], "count": 0, "error": str(e)})
 
 
-def _resolve(name: str, idx: str) -> Path:
+def _fetch_sheet(name: str, idx: str) -> bytes:
     name = _safe_name(name)
     if not idx.isdigit():
         raise HTTPException(400, "bad idx")
-    p = ANIMS_DIR / name / f"{idx}.png"
-    if not p.exists():
+    doc = fish_anims_col().find_one(
+        {"name": name, "idx": int(idx)},
+        {"sheet": 1},
+    )
+    if not doc:
         raise HTTPException(404, "not found")
-    return p
+    return bytes(doc["sheet"])
 
 
 @router.get("/api/fishanims/{name}/{idx}/sheet")
 async def fishanims_sheet(name: str, idx: str, request: Request) -> Response:
-    p = _resolve(name, idx)
-    return Response(content=p.read_bytes(), media_type="image/png",
+    return Response(content=_fetch_sheet(name, idx), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
 
 
@@ -226,9 +303,6 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
         raise HTTPException(503, f"input folder missing on server: {INPUT_DIR.name}")
     global _thread
     with _lock:
-        # Only block if a thread is genuinely alive — after a dyno crash the
-        # old status may say "running" even though no thread exists, so allow
-        # the user to re-trigger and resume (skip-existing handles dedup).
         if _status.state == "running" and _thread is not None and _thread.is_alive():
             raise HTTPException(409, "batch already running")
         _status.state = "running"
@@ -241,6 +315,8 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
         _status.started_at = time.time()
         _status.finished_at = None
     _stop_flag.clear()
+    with _lock:
+        _skip_fish.clear()
     _thread = threading.Thread(target=_batch_loop, daemon=True)
     _thread.start()
     return JSONResponse({"ok": True, "state": "running"})
@@ -250,6 +326,17 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
 async def fishanims_batch_stop(request: Request) -> JSONResponse:
     _stop_flag.set()
     return JSONResponse({"ok": True})
+
+
+@router.post("/api/fishanims/batch/skip/{name}")
+async def fishanims_batch_skip(name: str, request: Request) -> JSONResponse:
+    """Skip the rest of this fish's slots and move to the next species. The
+    batch worker checks this set at the top of each inner-loop iteration,
+    so the in-flight generation finishes first then the row terminates."""
+    name = _safe_name(name)
+    with _lock:
+        _skip_fish.add(name)
+    return JSONResponse({"ok": True, "skipped": name})
 
 
 @router.get("/api/fishanims/batch/status")
@@ -265,14 +352,14 @@ async def fishanims_batch_status(request: Request) -> JSONResponse:
             "error": _status.error,
             "started_at": _status.started_at,
             "finished_at": _status.finished_at,
+            "skipped_fish": sorted(_skip_fish),
         })
 
 
 @router.get("/api/fishanims/{name}/{idx}/download")
 async def fishanims_download(name: str, idx: str, request: Request) -> Response:
-    p = _resolve(name, idx)
     return Response(
-        content=p.read_bytes(),
+        content=_fetch_sheet(name, idx),
         media_type="image/png",
         headers={
             "Content-Disposition": f'attachment; filename="{name}_{idx}.png"',

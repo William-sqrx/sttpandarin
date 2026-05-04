@@ -6,6 +6,8 @@ const FRAME_MS = 100;
 const POLL_MS = 5000;
 
 let lastListKey = "";  // hash of (name + idx-list) so we re-render only on change
+let skippedFish = new Set();
+let batchRunning = false;
 
 async function fetchJSON(url) {
   const r = await fetch(url, { credentials: 'same-origin' });
@@ -96,6 +98,25 @@ function animate(canvas, img, sheet) {
   requestAnimationFrame(tick);
 }
 
+async function skipFish(name, button) {
+  button.disabled = true;
+  button.textContent = '…';
+  try {
+    const r = await fetch(`/api/fishanims/batch/skip/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    skippedFish.add(name);
+    button.textContent = 'skipped';
+    button.classList.add('skipped');
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = 'Skip rest →';
+    alert(`skip failed: ${e.message}`);
+  }
+}
+
 function renderGrid(rows) {
   const grid = document.getElementById('grid');
   grid.innerHTML = '';
@@ -103,9 +124,30 @@ function renderGrid(rows) {
     const div = document.createElement('div');
     div.className = 'row';
 
+    const isComplete = row.sheets.length >= 5;
+    const isSkipped = skippedFish.has(row.name);
+
     const name = document.createElement('div');
     name.className = 'row-name';
-    name.innerHTML = `${row.name}<small>${row.sheets.length} sheet${row.sheets.length !== 1 ? 's' : ''}</small>`;
+    const skipBtn = document.createElement('button');
+    skipBtn.type = 'button';
+    skipBtn.className = 'skip-btn';
+    if (isSkipped) {
+      skipBtn.textContent = 'skipped';
+      skipBtn.classList.add('skipped');
+      skipBtn.disabled = true;
+    } else if (isComplete) {
+      skipBtn.textContent = 'done';
+      skipBtn.disabled = true;
+    } else if (!batchRunning) {
+      skipBtn.textContent = 'idle';
+      skipBtn.disabled = true;
+    } else {
+      skipBtn.textContent = 'Skip rest →';
+      skipBtn.addEventListener('click', () => skipFish(row.name, skipBtn));
+    }
+    name.innerHTML = `<div class="row-name-text">${row.name}<small>${row.sheets.length}/5 sheets</small></div>`;
+    name.appendChild(skipBtn);
     div.appendChild(name);
 
     for (let i = 0; i < 5; i++) {
@@ -152,6 +194,15 @@ async function tick() {
   const [list, status] = await Promise.all([loadList(), loadStatus()]);
   renderStatus(status);
 
+  // Keep skip-state in sync with the server (browser refreshes pick up
+  // already-skipped fish; running state controls whether button is active).
+  const wasRunning = batchRunning;
+  batchRunning = !!(status && status.state === 'running');
+  const newSkipped = new Set((status && status.skipped_fish) || []);
+  const skippedChanged = newSkipped.size !== skippedFish.size
+    || [...newSkipped].some(n => !skippedFish.has(n));
+  skippedFish = newSkipped;
+
   if (list) {
     document.getElementById('count').textContent = `${list.count} fish`;
     if (list.count === 0 && (!status || status.state === 'idle')) {
@@ -160,15 +211,14 @@ async function tick() {
       document.getElementById('empty').hidden = true;
     }
     const key = listKey(list.rows);
-    if (key !== lastListKey) {
+    // Re-render if list shape changed OR running-state flipped OR skip-set changed
+    if (key !== lastListKey || wasRunning !== batchRunning || skippedChanged) {
       lastListKey = key;
       renderGrid(list.rows);
     }
   }
 
-  // Keep polling forever while batch is running OR has any sheets — so the
-  // user always sees latest state. When idle + 0 sheets, drop to slow poll.
-  const fast = status && (status.state === 'running');
+  const fast = batchRunning;
   setTimeout(tick, fast ? POLL_MS : POLL_MS * 4);
 }
 

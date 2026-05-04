@@ -115,17 +115,46 @@ main {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  gap: 6px;
   font-weight: 600;
   font-size: 14px;
   word-break: break-word;
   padding: 0 6px;
 }
+.row-name-text { line-height: 1.2; }
 .row-name small {
   display: block;
   color: var(--ink-2);
   font-weight: 400;
   font-size: 11px;
   margin-top: 4px;
+}
+.skip-btn {
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.skip-btn:not(:disabled):hover {
+  background: var(--accent);
+  color: #0a0c10;
+  border-color: var(--accent);
+}
+.skip-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+  font-weight: 400;
+}
+.skip-btn.skipped {
+  background: #2a2f1f;
+  color: #d8c270;
+  border-color: #4a4628;
+  opacity: 1;
 }
 .cell {
   background: var(--panel-2);
