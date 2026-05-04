@@ -108,8 +108,31 @@ main {
   align-items: stretch;
   padding: 12px;
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 2px solid var(--line);
   border-radius: 10px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.row.generating {
+  border-color: #6dffb3;
+  background: linear-gradient(180deg, var(--panel) 0%, #14241c 100%);
+  animation: row-pulse 1.6s ease-in-out infinite;
+}
+@keyframes row-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(109, 255, 179, 0.0); }
+  50%      { box-shadow: 0 0 0 4px rgba(109, 255, 179, 0.35); }
+}
+.gen-pill {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6dffb3;
+  background: #14241c;
+  border: 1px solid #1f4f37;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  text-align: center;
 }
 .row-name {
   display: flex;
@@ -129,7 +152,14 @@ main {
   font-size: 11px;
   margin-top: 4px;
 }
-.skip-btn {
+.btn-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.skip-btn,
+.regen-btn {
+  flex: 1;
   background: var(--panel-2);
   color: var(--ink);
   border: 1px solid var(--line);
@@ -139,13 +169,20 @@ main {
   font-weight: 600;
   cursor: pointer;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
+  white-space: nowrap;
 }
 .skip-btn:not(:disabled):hover {
   background: var(--accent);
   color: #0a0c10;
   border-color: var(--accent);
 }
-.skip-btn:disabled {
+.regen-btn:not(:disabled):hover {
+  background: #ff8aa8;
+  color: #0a0c10;
+  border-color: #ff8aa8;
+}
+.skip-btn:disabled,
+.regen-btn:disabled {
   cursor: default;
   opacity: 0.6;
   font-weight: 400;
@@ -154,6 +191,12 @@ main {
   background: #2a2f1f;
   color: #d8c270;
   border-color: #4a4628;
+  opacity: 1;
+}
+.regen-btn.queued {
+  background: #3a2030;
+  color: #ff8aa8;
+  border-color: #5a2840;
   opacity: 1;
 }
 .cell {

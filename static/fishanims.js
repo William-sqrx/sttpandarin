@@ -7,7 +7,11 @@ const POLL_MS = 5000;
 
 let lastListKey = "";  // hash of (name + idx-list) so we re-render only on change
 let skippedFish = new Set();
+let regenQueue = new Set();
 let batchRunning = false;
+const rowEls = new Map();  // species name → row DOM element (so we can update
+                            // .generating class without re-rendering the grid)
+let lastCurrentStem = null;
 
 async function fetchJSON(url) {
   const r = await fetch(url, { credentials: 'same-origin' });
@@ -117,18 +121,53 @@ async function skipFish(name, button) {
   }
 }
 
+async function regenFish(name, button) {
+  if (!confirm(`Regenerate all 5 sheets for ${name}?\n(Existing sheets will be wiped — costs 5 fresh PixelLab calls.)`)) {
+    return;
+  }
+  button.disabled = true;
+  button.textContent = '…';
+  try {
+    const r = await fetch(`/api/fishanims/batch/regen/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    regenQueue.add(name);
+    button.textContent = 'queued';
+    button.classList.add('queued');
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = 'Regen ↻';
+    alert(`regen failed: ${e.message}`);
+  }
+}
+
 function renderGrid(rows) {
   const grid = document.getElementById('grid');
   grid.innerHTML = '';
+  rowEls.clear();
   for (const row of rows) {
     const div = document.createElement('div');
     div.className = 'row';
+    rowEls.set(row.name, div);
 
     const isComplete = row.sheets.length >= 5;
     const isSkipped = skippedFish.has(row.name);
+    const isQueued = regenQueue.has(row.name);
 
     const name = document.createElement('div');
     name.className = 'row-name';
+    name.innerHTML = `<div class="row-name-text">${row.name}<small>${row.sheets.length}/5 sheets</small></div>`;
+    const genPill = document.createElement('div');
+    genPill.className = 'gen-pill';
+    genPill.hidden = true;
+    name.appendChild(genPill);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'btn-row';
+
+    // Skip button
     const skipBtn = document.createElement('button');
     skipBtn.type = 'button';
     skipBtn.className = 'skip-btn';
@@ -146,8 +185,30 @@ function renderGrid(rows) {
       skipBtn.textContent = 'Skip rest →';
       skipBtn.addEventListener('click', () => skipFish(row.name, skipBtn));
     }
-    name.innerHTML = `<div class="row-name-text">${row.name}<small>${row.sheets.length}/5 sheets</small></div>`;
-    name.appendChild(skipBtn);
+    btnRow.appendChild(skipBtn);
+
+    // Regen button — only for fish that have at least 1 sheet and the
+    // batch is running (regen is processed by the running worker).
+    const regenBtn = document.createElement('button');
+    regenBtn.type = 'button';
+    regenBtn.className = 'regen-btn';
+    if (isQueued) {
+      regenBtn.textContent = 'queued';
+      regenBtn.classList.add('queued');
+      regenBtn.disabled = true;
+    } else if (!batchRunning) {
+      regenBtn.textContent = '↻ idle';
+      regenBtn.disabled = true;
+    } else if (row.sheets.length === 0) {
+      regenBtn.textContent = '↻';
+      regenBtn.disabled = true;
+    } else {
+      regenBtn.textContent = 'Regen ↻';
+      regenBtn.addEventListener('click', () => regenFish(row.name, regenBtn));
+    }
+    btnRow.appendChild(regenBtn);
+
+    name.appendChild(btnRow);
     div.appendChild(name);
 
     for (let i = 0; i < 5; i++) {
@@ -164,6 +225,32 @@ function renderGrid(rows) {
     }
 
     grid.appendChild(div);
+  }
+}
+
+function updateGeneratingHighlight(status) {
+  const cur = (status && status.current) || '';
+  // _status.current is "<stem> <idx>/<total>" (or with trailing " (regen)")
+  const stem = cur.split(' ')[0] || null;
+  const detail = stem ? cur.slice(stem.length).trim() : '';
+
+  for (const [name, el] of rowEls) {
+    const pill = el.querySelector('.gen-pill');
+    if (name === stem && batchRunning) {
+      el.classList.add('generating');
+      pill.textContent = `⟳ ${detail}`;
+      pill.hidden = false;
+    } else {
+      el.classList.remove('generating');
+      if (pill) pill.hidden = true;
+    }
+  }
+
+  // Auto-scroll to the row that just became active.
+  if (stem && stem !== lastCurrentStem && batchRunning) {
+    const el = rowEls.get(stem);
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    lastCurrentStem = stem;
   }
 }
 
@@ -199,9 +286,13 @@ async function tick() {
   const wasRunning = batchRunning;
   batchRunning = !!(status && status.state === 'running');
   const newSkipped = new Set((status && status.skipped_fish) || []);
+  const newRegen = new Set((status && status.regen_queue) || []);
   const skippedChanged = newSkipped.size !== skippedFish.size
     || [...newSkipped].some(n => !skippedFish.has(n));
+  const regenChanged = newRegen.size !== regenQueue.size
+    || [...newRegen].some(n => !regenQueue.has(n));
   skippedFish = newSkipped;
+  regenQueue = newRegen;
 
   if (list) {
     document.getElementById('count').textContent = `${list.count} fish`;
@@ -211,12 +302,17 @@ async function tick() {
       document.getElementById('empty').hidden = true;
     }
     const key = listKey(list.rows);
-    // Re-render if list shape changed OR running-state flipped OR skip-set changed
-    if (key !== lastListKey || wasRunning !== batchRunning || skippedChanged) {
+    // Re-render if list shape changed OR running-state flipped OR skip/regen set changed
+    if (key !== lastListKey || wasRunning !== batchRunning || skippedChanged || regenChanged) {
       lastListKey = key;
       renderGrid(list.rows);
     }
   }
+
+  // Update the currently-generating row's highlight + auto-scroll. This
+  // runs every tick so the visual updates without re-rendering the grid
+  // (which would restart canvas animations).
+  updateGeneratingHighlight(status);
 
   const fast = batchRunning;
   setTimeout(tick, fast ? POLL_MS : POLL_MS * 4);
