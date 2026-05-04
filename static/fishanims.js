@@ -75,6 +75,32 @@ function listKey(rows) {
   return rows.map(r => r.name + ':' + r.sheets.map(s => s.idx).join(',')).join('|');
 }
 
+function augmentRows(rows, status) {
+  // The /api/fishanims/list endpoint only returns fish that have at least
+  // 1 sheet in MongoDB. Augment with placeholder rows for the currently-
+  // generating fish (so the user can see "this is what's happening RIGHT
+  // NOW") and any persistently-skipped fish (so they can un-skip them).
+  const byName = new Map(rows.map(r => [r.name, r]));
+
+  if (status && status.state === 'running' && status.current) {
+    const stem = status.current.split(' ')[0];
+    if (stem && !byName.has(stem)) {
+      byName.set(stem, { name: stem, sheets: [] });
+    }
+  }
+
+  const skips = (status && status.skipped_fish) || [];
+  for (const stem of skips) {
+    if (!byName.has(stem)) {
+      byName.set(stem, { name: stem, sheets: [] });
+    }
+  }
+
+  return Array.from(byName.values()).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+}
+
 async function loadList() {
   try {
     return await fetchJSON('/api/fishanims/list');
@@ -386,16 +412,19 @@ async function tick() {
 
   if (list) {
     document.getElementById('count').textContent = `${list.count} fish`;
-    if (list.count === 0 && (!status || status.state === 'idle')) {
+    // Use augmented rows so the currently-generating fish + skipped fish
+    // appear in the grid even when they have 0 sheets yet.
+    const augmented = augmentRows(list.rows, status);
+    if (augmented.length === 0 && (!status || status.state === 'idle')) {
       document.getElementById('empty').hidden = false;
     } else {
       document.getElementById('empty').hidden = true;
     }
-    const key = listKey(list.rows);
+    const key = listKey(augmented);
     // Re-render if list shape changed OR running-state flipped OR skip/regen set changed
     if (key !== lastListKey || wasRunning !== batchRunning || skippedChanged || regenChanged) {
       lastListKey = key;
-      renderGrid(list.rows);
+      renderGrid(augmented);
     }
   }
 
