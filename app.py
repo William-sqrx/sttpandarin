@@ -627,7 +627,18 @@ def _pl_poll(job_id: str) -> dict:
         if st == "completed":
             return pl.get("last_response") or pl
         if st in ("failed", "error", "cancelled"):
-            raise RuntimeError(f"PixelLab job {job_id} {st}")
+            # Surface PixelLab's failure reason so we can diagnose. The
+            # error detail can live in any of these fields depending on
+            # the failure mode: "error", "error_message", "message", or
+            # nested under "last_response".
+            last = pl.get("last_response") or {}
+            detail = (
+                pl.get("error") or pl.get("error_message")
+                or pl.get("message") or last.get("error")
+                or last.get("error_message") or last.get("message")
+                or json.dumps(pl)[:300]
+            )
+            raise RuntimeError(f"PixelLab job {job_id} {st}: {detail}")
         time.sleep(3)
     raise RuntimeError("PixelLab job timed out")
 

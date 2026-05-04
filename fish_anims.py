@@ -29,6 +29,7 @@ STATIC_DIR = APP_DIR / "static"
 INPUT_DIR = APP_DIR / "Chinesely Fish (256)"
 PER_FISH = 5
 KEEPALIVE_SECS = 60
+MAX_CONSECUTIVE_FAILS = 8  # auto-stop after this many back-to-back failures
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
@@ -49,7 +50,8 @@ class _BatchStatus:
     skipped: int = 0
     failed: int = 0
     current: str = ""
-    error: str | None = None
+    error: str | None = None        # set when state == "error"
+    last_error: str | None = None   # most recent per-sheet failure detail
     started_at: float | None = None
     finished_at: float | None = None
 
@@ -183,6 +185,7 @@ def _generate_and_save_one(col, stem: str, idx: int, ref_bytes: bytes,
     if sheet_bytes is None:
         with _lock:
             _status.failed += 1
+            _status.last_error = f"{stem}/{idx}{label}: {last_err}"
         print(f"[fishanims] FAIL {stem}/{idx}{label}: {last_err}", flush=True)
         return False
 
@@ -217,6 +220,7 @@ def _generate_and_save_one(col, stem: str, idx: int, ref_bytes: bytes,
                 time.sleep(backoff)
     with _lock:
         _status.failed += 1
+        _status.last_error = f"{stem}/{idx}{label}: mongo write failed (sheet lost)"
     print(f"[fishanims] PERMANENT MONGO WRITE FAIL {stem}/{idx}{label} "
           f"(sheet bytes lost — re-trigger to regenerate)", flush=True)
     return False
@@ -273,6 +277,7 @@ def _batch_loop() -> None:
             _status.total = len(pngs) * PER_FISH
 
         keepalive_thread.start()
+        consecutive_fails = 0
 
         for png in pngs:
             if _stop_flag.is_set():
@@ -296,7 +301,22 @@ def _batch_loop() -> None:
                         _status.skipped += 1
                     continue
 
-                _generate_and_save_one(col, stem, idx, ref_bytes)
+                if _generate_and_save_one(col, stem, idx, ref_bytes):
+                    consecutive_fails = 0
+                else:
+                    consecutive_fails += 1
+                    if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
+                        with _lock:
+                            _status.state = "error"
+                            _status.error = (
+                                f"auto-stopped after {consecutive_fails} consecutive "
+                                f"PixelLab failures — check Render logs for the reason"
+                            )
+                            _status.finished_at = time.time()
+                            _status.current = ""
+                        print(f"[fishanims] auto-stop: {consecutive_fails} consecutive "
+                              f"fails — bailing out", flush=True)
+                        return
                 # After every sheet save, drain any regen requests that
                 # arrived during this sheet's generation. This makes regen
                 # take effect "as soon as the in-flight sheet finishes",
@@ -396,6 +416,7 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
         _status.failed = 0
         _status.current = ""
         _status.error = None
+        _status.last_error = None
         _status.started_at = time.time()
         _status.finished_at = None
     _stop_flag.clear()
@@ -471,6 +492,7 @@ async def fishanims_batch_status(request: Request) -> JSONResponse:
             "failed": _status.failed,
             "current": _status.current,
             "error": _status.error,
+            "last_error": _status.last_error,
             "started_at": _status.started_at,
             "finished_at": _status.finished_at,
             "skipped_fish": sorted(_skip_fish),

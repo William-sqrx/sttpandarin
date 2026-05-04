@@ -425,21 +425,38 @@ function renderStatus(s) {
   const state = document.getElementById('status-state');
   const prog = document.getElementById('status-progress');
   const cur = document.getElementById('status-current');
+  const errBanner = document.getElementById('error-banner');
 
   if (s.state === 'idle') {
     bar.hidden = true;
-    return;
-  }
-  bar.hidden = false;
-  state.textContent = s.state;
-  state.dataset.state = s.state;
+  } else {
+    bar.hidden = false;
+    state.textContent = s.state;
+    state.dataset.state = s.state;
 
-  const totalSeen = s.done + s.skipped + s.failed;
-  const tot = s.total || totalSeen;
-  prog.textContent = tot > 0
-    ? `${totalSeen}/${tot}  (done ${s.done} · skip ${s.skipped} · fail ${s.failed})`
-    : '';
-  cur.textContent = s.current ? `→ ${s.current}` : '';
+    const totalSeen = s.done + s.skipped + s.failed;
+    const tot = s.total || totalSeen;
+    prog.textContent = tot > 0
+      ? `${totalSeen}/${tot}  (done ${s.done} · skip ${s.skipped} · fail ${s.failed})`
+      : '';
+    cur.textContent = s.current ? `→ ${s.current}` : '';
+  }
+
+  // Surface errors prominently. Fatal (state=error) takes precedence;
+  // otherwise show the most recent per-sheet failure if there are fails.
+  let errText = '';
+  if (s.state === 'error' && s.error) {
+    errText = `⚠ ${s.error}`;
+  } else if (s.failed > 0 && s.last_error) {
+    errText = `⚠ last failure — ${s.last_error}`;
+  }
+  if (errText) {
+    errBanner.textContent = errText;
+    errBanner.hidden = false;
+    errBanner.classList.toggle('fatal', s.state === 'error');
+  } else {
+    errBanner.hidden = true;
+  }
 }
 
 async function tick() {
