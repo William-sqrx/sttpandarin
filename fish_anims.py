@@ -22,7 +22,7 @@ from bson import Binary
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from db import fish_anims_col
+from db import fish_anims_col, fish_anims_skips_col
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
@@ -60,7 +60,25 @@ _stop_flag = threading.Event()
 _thread: threading.Thread | None = None
 _migrated_once = False
 _skip_fish: set[str] = set()
+_skip_set_loaded = False  # in-memory cache of persistent skips loaded yet?
 _regen_queue: list[str] = []  # FIFO of fish to fully regenerate (5 fresh sheets)
+
+
+def _ensure_skip_set_loaded() -> None:
+    """Load persistent skips from MongoDB into the in-memory _skip_fish cache.
+    Runs at most once per process — subsequent calls are no-ops. The skip
+    endpoints keep MongoDB and the cache in sync after this initial load."""
+    global _skip_set_loaded
+    if _skip_set_loaded:
+        return
+    try:
+        persisted = {d["name"]
+                     for d in fish_anims_skips_col().find({}, {"name": 1})}
+        with _lock:
+            _skip_fish.update(persisted)
+        _skip_set_loaded = True
+    except Exception as e:  # noqa: BLE001
+        print(f"[fishanims] load skips skipped: {e}", flush=True)
 
 
 def _ensure_migrated() -> None:
@@ -240,6 +258,7 @@ def _batch_loop() -> None:
         from app import _generate_one  # noqa: WPS433,F401
         col = fish_anims_col()
         _ensure_migrated()
+        _ensure_skip_set_loaded()
 
         if not INPUT_DIR.is_dir():
             with _lock:
@@ -380,8 +399,11 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
         _status.started_at = time.time()
         _status.finished_at = None
     _stop_flag.clear()
+    # Persistent skips survive Start cycles — once a fish is skipped, it
+    # stays skipped until you explicitly unskip it. Only the transient regen
+    # queue is reset here.
+    _ensure_skip_set_loaded()
     with _lock:
-        _skip_fish.clear()
         _regen_queue.clear()
     _thread = threading.Thread(target=_batch_loop, daemon=True)
     _thread.start()
@@ -396,13 +418,32 @@ async def fishanims_batch_stop(request: Request) -> JSONResponse:
 
 @router.post("/api/fishanims/batch/skip/{name}")
 async def fishanims_batch_skip(name: str, request: Request) -> JSONResponse:
-    """Skip the rest of this fish's slots and move to the next species. The
-    batch worker checks this set at the top of each inner-loop iteration,
-    so the in-flight generation finishes first then the row terminates."""
+    """Skip this fish — both the rest of the current row AND every future
+    batch run, until explicitly unskipped. Persisted in MongoDB so the
+    decision survives dyno restarts. The batch worker checks the in-memory
+    cache at the top of each inner-loop iteration, so the in-flight
+    generation finishes first then the row terminates."""
     name = _safe_name(name)
+    fish_anims_skips_col().update_one(
+        {"name": name},
+        {"$set": {"name": name, "skipped_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
     with _lock:
         _skip_fish.add(name)
     return JSONResponse({"ok": True, "skipped": name})
+
+
+@router.post("/api/fishanims/batch/unskip/{name}")
+async def fishanims_batch_unskip(name: str, request: Request) -> JSONResponse:
+    """Reverse a previous skip. The fish becomes eligible for generation
+    again on the next batch tick (or immediately if currently being skipped
+    over). MongoDB doc is removed so the unskip persists too."""
+    name = _safe_name(name)
+    fish_anims_skips_col().delete_one({"name": name})
+    with _lock:
+        _skip_fish.discard(name)
+    return JSONResponse({"ok": True, "unskipped": name})
 
 
 @router.post("/api/fishanims/batch/regen/{name}")
@@ -420,6 +461,7 @@ async def fishanims_batch_regen(name: str, request: Request) -> JSONResponse:
 
 @router.get("/api/fishanims/batch/status")
 async def fishanims_batch_status(request: Request) -> JSONResponse:
+    _ensure_skip_set_loaded()
     with _lock:
         return JSONResponse({
             "state": _status.state,

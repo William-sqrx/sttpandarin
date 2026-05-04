@@ -55,6 +55,15 @@ def fish_anims_col() -> Collection:
     return col
 
 
+def fish_anims_skips_col() -> Collection:
+    """Persistent skip list: { name, skipped_at }. The batch worker queries
+    this on startup so a "skip" decision survives dyno restarts and the
+    next time the user clicks Start."""
+    col = _client()[DB_NAME]["fish_anims_skips"]
+    col.create_index("name", unique=True, name="name_unique")
+    return col
+
+
 def _norm(s: str) -> str:
     return (s or "").strip()
 

@@ -5,6 +5,58 @@
 const FRAME_MS = 100;
 const POLL_MS = 5000;
 
+const startBtn = document.getElementById('start-btn');
+const stopBtn = document.getElementById('stop-btn');
+const controlHint = document.getElementById('control-hint');
+
+async function startBatch() {
+  startBtn.disabled = true;
+  const original = startBtn.textContent;
+  startBtn.textContent = 'starting…';
+  try {
+    const r = await fetch('/api/fishanims/batch/start', {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      throw new Error(`${r.status} ${text.slice(0, 120)}`);
+    }
+    // Refresh state immediately so the user sees the running state.
+    setTimeout(tick, 200);
+  } catch (e) {
+    alert(`start failed: ${e.message}`);
+  } finally {
+    startBtn.disabled = false;
+    startBtn.textContent = original;
+  }
+}
+
+async function stopBatch() {
+  if (!confirm('Stop the batch?\n(Already-saved sheets stay in MongoDB. You can resume any time by clicking Start.)')) {
+    return;
+  }
+  stopBtn.disabled = true;
+  const original = stopBtn.textContent;
+  stopBtn.textContent = 'stopping…';
+  try {
+    const r = await fetch('/api/fishanims/batch/stop', {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    setTimeout(tick, 200);
+  } catch (e) {
+    alert(`stop failed: ${e.message}`);
+  } finally {
+    stopBtn.disabled = false;
+    stopBtn.textContent = original;
+  }
+}
+
+startBtn.addEventListener('click', startBatch);
+stopBtn.addEventListener('click', stopBatch);
+
 let lastListKey = "";  // hash of (name + idx-list) so we re-render only on change
 let skippedFish = new Set();
 let regenQueue = new Set();
@@ -112,13 +164,33 @@ async function skipFish(name, button) {
     });
     if (!r.ok) throw new Error(`${r.status}`);
     skippedFish.add(name);
-    button.textContent = 'skipped';
-    button.classList.add('skipped');
+    // Re-render to swap the button into its unskip state.
+    lastListKey = '';
   } catch (e) {
     button.disabled = false;
     button.textContent = 'Skip rest →';
     alert(`skip failed: ${e.message}`);
   }
+  tick();
+}
+
+async function unskipFish(name, button) {
+  button.disabled = true;
+  button.textContent = '…';
+  try {
+    const r = await fetch(`/api/fishanims/batch/unskip/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    skippedFish.delete(name);
+    lastListKey = '';
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = '✗ unskip';
+    alert(`unskip failed: ${e.message}`);
+  }
+  tick();
 }
 
 async function regenFish(name, button) {
@@ -167,14 +239,15 @@ function renderGrid(rows) {
     const btnRow = document.createElement('div');
     btnRow.className = 'btn-row';
 
-    // Skip button
+    // Skip button — clicking when already skipped reverses it (un-skip).
     const skipBtn = document.createElement('button');
     skipBtn.type = 'button';
     skipBtn.className = 'skip-btn';
     if (isSkipped) {
-      skipBtn.textContent = 'skipped';
+      skipBtn.textContent = '✗ unskip';
       skipBtn.classList.add('skipped');
-      skipBtn.disabled = true;
+      skipBtn.title = 'Reverse the skip — fish becomes eligible for generation again';
+      skipBtn.addEventListener('click', () => unskipFish(row.name, skipBtn));
     } else if (isComplete) {
       skipBtn.textContent = 'done';
       skipBtn.disabled = true;
@@ -285,6 +358,23 @@ async function tick() {
   // already-skipped fish; running state controls whether button is active).
   const wasRunning = batchRunning;
   batchRunning = !!(status && status.state === 'running');
+
+  // Toggle Start/Stop visibility based on batch state.
+  startBtn.hidden = batchRunning;
+  stopBtn.hidden = !batchRunning;
+  if (status) {
+    if (batchRunning) {
+      controlHint.textContent = '';
+    } else if (status.state === 'finished') {
+      controlHint.textContent = 'all done — click Start to add more / regenerate';
+    } else if (status.state === 'stopped') {
+      controlHint.textContent = 'stopped — click Start to resume';
+    } else if (status.state === 'error') {
+      controlHint.textContent = `error: ${status.error || 'unknown'} — click Start to retry`;
+    } else {
+      controlHint.textContent = 'idle — click Start to begin';
+    }
+  }
   const newSkipped = new Set((status && status.skipped_fish) || []);
   const newRegen = new Set((status && status.regen_queue) || []);
   const skippedChanged = newSkipped.size !== skippedFish.size
