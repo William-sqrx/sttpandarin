@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fish Animations Gallery — Chinesely</title>
-<link rel="stylesheet" href="/static/fishanims.css?v=10">
+<link rel="stylesheet" href="/static/fishanims.css?v=11">
 </head>
 <body>
 <header class="topbar">
@@ -32,6 +32,35 @@
     The batch runs on the server — trigger it from your laptop with
     <code>python3 trigger_batch.py</code>. Click <strong>Download</strong> to save a sprite sheet.
   </p>
+
+  <section class="sandbox" aria-label="Sprite sheet sandbox">
+    <header class="sandbox-head">
+      <h2>Sprite sheet sandbox</h2>
+      <p>Drop a sheet to preview it animated. Frames are auto-detected (square frames laid out horizontally).</p>
+    </header>
+    <div class="sandbox-body">
+      <label id="sandbox-drop" class="sandbox-drop" for="sandbox-file">
+        <input id="sandbox-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        <div class="sandbox-drop-inner">
+          <div class="sandbox-drop-title">Drop sprite sheet here</div>
+          <div class="sandbox-drop-sub">or click to browse — PNG / JPG / WebP</div>
+        </div>
+      </label>
+      <div class="sandbox-preview">
+        <canvas id="sandbox-canvas" width="256" height="256"></canvas>
+        <div id="sandbox-meta" class="sandbox-meta">no sheet loaded</div>
+        <div class="sandbox-controls">
+          <label class="sandbox-fps">
+            FPS <span id="sandbox-fps-val">10</span>
+            <input id="sandbox-fps" type="range" min="1" max="30" value="10">
+          </label>
+          <button id="sandbox-toggle" type="button" class="sandbox-btn" disabled>⏸ pause</button>
+          <button id="sandbox-clear" type="button" class="sandbox-btn" disabled>✕ clear</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <div id="grid" class="grid"></div>
   <div id="empty" class="empty" hidden>
     No animations yet. Trigger the prod batch:<br>
@@ -39,6 +68,6 @@
   </div>
 </main>
 
-<script src="/static/fishanims.js?v=10"></script>
+<script src="/static/fishanims.js?v=11"></script>
 </body>
 </html>

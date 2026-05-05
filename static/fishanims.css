@@ -166,6 +166,124 @@ main {
   border-radius: 4px;
   font-size: 12px;
 }
+.sandbox {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 22px;
+}
+.sandbox-head h2 {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.sandbox-head p {
+  margin: 0 0 14px 0;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.sandbox-body {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 14px;
+  align-items: stretch;
+}
+.sandbox-drop {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  background: var(--panel-2);
+  border: 2px dashed var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.06s;
+  text-align: center;
+}
+.sandbox-drop:hover { border-color: var(--accent); }
+.sandbox-drop.drag {
+  border-color: var(--accent);
+  background: #1f2535;
+}
+.sandbox-drop:active { transform: translateY(1px); }
+.sandbox-drop-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.sandbox-drop-sub {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.sandbox-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#sandbox-canvas {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #0a0c10;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  image-rendering: pixelated;
+}
+.sandbox-meta {
+  font-size: 11px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  word-break: break-word;
+}
+.sandbox-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sandbox-fps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.sandbox-fps span {
+  color: var(--ink);
+  font-weight: 600;
+  min-width: 20px;
+  text-align: right;
+}
+.sandbox-fps input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.sandbox-btn {
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.sandbox-btn:not(:disabled):hover {
+  background: var(--accent);
+  color: #0a0c10;
+  border-color: var(--accent);
+}
+.sandbox-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+@media (max-width: 720px) {
+  .sandbox-body { grid-template-columns: 1fr; }
+}
+
 .grid {
   display: flex;
   flex-direction: column;

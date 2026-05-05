@@ -5,6 +5,171 @@
 const FRAME_MS = 100;
 const POLL_MS = 5000;
 
+// ----- Sandbox: upload-and-animate any sprite sheet -------------------------
+// Self-contained. Frame count = round(sheet_width / sheet_height) — the same
+// horizontally-tiled square-frame convention used everywhere else in the app.
+(function initSandbox() {
+  const drop = document.getElementById('sandbox-drop');
+  const fileInput = document.getElementById('sandbox-file');
+  const canvas = document.getElementById('sandbox-canvas');
+  const meta = document.getElementById('sandbox-meta');
+  const fpsRange = document.getElementById('sandbox-fps');
+  const fpsLabel = document.getElementById('sandbox-fps-val');
+  const toggleBtn = document.getElementById('sandbox-toggle');
+  const clearBtn = document.getElementById('sandbox-clear');
+  if (!drop || !canvas) return;
+
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  let img = null;
+  let objectUrl = null;
+  let frames = 1;
+  let frameW = 256;
+  let frameH = 256;
+  let playing = false;
+  let frameIdx = 0;
+  let lastTick = 0;
+  let rafId = 0;
+
+  function drawIdle(text) {
+    ctx.fillStyle = '#0a0c10';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (text) {
+      ctx.fillStyle = '#aab2c0';
+      ctx.font = '12px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    }
+  }
+
+  function drawFrame() {
+    if (!img) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(
+      img,
+      frameIdx * frameW, 0,
+      frameW, frameH,
+      0, 0,
+      canvas.width, canvas.height,
+    );
+  }
+
+  function loop(now) {
+    if (!playing || !img) return;
+    const fps = Math.max(1, parseInt(fpsRange.value, 10) || 10);
+    const stepMs = 1000 / fps;
+    if (now - lastTick >= stepMs) {
+      drawFrame();
+      frameIdx = (frameIdx + 1) % Math.max(1, frames);
+      lastTick = now;
+    }
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function startLoop() {
+    if (!img) return;
+    playing = true;
+    toggleBtn.textContent = '⏸ pause';
+    cancelAnimationFrame(rafId);
+    lastTick = performance.now();
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function pauseLoop() {
+    playing = false;
+    toggleBtn.textContent = '▶ play';
+    cancelAnimationFrame(rafId);
+  }
+
+  function clearSheet() {
+    pauseLoop();
+    img = null;
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+    }
+    frames = 1;
+    frameIdx = 0;
+    canvas.width = 256;
+    canvas.height = 256;
+    drawIdle('no sheet loaded');
+    meta.textContent = 'no sheet loaded';
+    toggleBtn.disabled = true;
+    clearBtn.disabled = true;
+    fileInput.value = '';
+  }
+
+  function loadFile(file) {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) {
+      meta.textContent = `unsupported file type: ${file.type || 'unknown'}`;
+      return;
+    }
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(file);
+    const next = new Image();
+    next.onload = () => {
+      img = next;
+      frameH = next.naturalHeight;
+      frames = Math.max(1, Math.round(next.naturalWidth / next.naturalHeight));
+      frameW = Math.round(next.naturalWidth / frames);
+      // Keep canvas pixel buffer = one frame so drawImage scales 1:1
+      // and CSS handles the on-page size.
+      canvas.width = frameW;
+      canvas.height = frameH;
+      frameIdx = 0;
+      meta.textContent =
+        `${file.name} · ${next.naturalWidth}×${next.naturalHeight} · `
+        + `${frames} frame${frames === 1 ? '' : 's'} of ${frameW}×${frameH}`;
+      toggleBtn.disabled = false;
+      clearBtn.disabled = false;
+      drawFrame();
+      startLoop();
+    };
+    next.onerror = () => {
+      meta.textContent = `failed to decode "${file.name}" — is it a valid image?`;
+    };
+    next.src = objectUrl;
+  }
+
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (f) loadFile(f);
+  });
+
+  ['dragenter', 'dragover'].forEach((ev) => {
+    drop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      drop.classList.add('drag');
+    });
+  });
+  ['dragleave', 'drop'].forEach((ev) => {
+    drop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === 'dragleave' && e.target !== drop) return;
+      drop.classList.remove('drag');
+    });
+  });
+  drop.addEventListener('drop', (e) => {
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) loadFile(f);
+  });
+
+  fpsRange.addEventListener('input', () => {
+    fpsLabel.textContent = fpsRange.value;
+  });
+
+  toggleBtn.addEventListener('click', () => {
+    if (playing) pauseLoop();
+    else startLoop();
+  });
+  clearBtn.addEventListener('click', clearSheet);
+
+  drawIdle('no sheet loaded');
+})();
+
 const startBtn = document.getElementById('start-btn');
 const stopBtn = document.getElementById('stop-btn');
 const controlHint = document.getElementById('control-hint');
