@@ -60,6 +60,7 @@ stopBtn.addEventListener('click', stopBatch);
 let lastListKey = "";  // hash of (name + idx-list) so we re-render only on change
 let skippedFish = new Set();
 let regenQueue = new Set();
+let customRefs = new Set();  // species names with a user-uploaded ref image
 let batchRunning = false;
 const rowEls = new Map();  // species name → row DOM element (so we can update
                             // .generating class without re-rendering the grid)
@@ -73,7 +74,11 @@ async function fetchJSON(url) {
 }
 
 function listKey(rows) {
-  return rows.map(r => r.name + ':' + r.sheets.map(s => s.idx).join(',')).join('|');
+  // Include hasCustomRef in the hash so toggling a custom ref re-renders
+  // the row with the right badge + reset button.
+  return rows.map(r =>
+    r.name + ':' + r.sheets.map(s => s.idx).join(',') + ':' + (r.hasCustomRef ? '1' : '0'),
+  ).join('|');
 }
 
 function augmentRows(rows, status) {
@@ -144,27 +149,65 @@ function makeCell(name, sheet) {
   actions.appendChild(dl);
   cell.appendChild(actions);
 
-  // Default behavior: draw frame 0 as a static preview. Only animate when
-  // the row's Reveal button is toggled on (revealedRows.has(name)). This
-  // keeps the page responsive when the gallery has many rows.
+  // Lazy-load: don't fetch the sprite sheet on row creation. With many
+  // rows the parallel image fetches choked the page. Instead the URL
+  // is stashed on the canvas and the actual <Image> is only created
+  // when the row's Reveal button is pressed (loadSheet below). Hidden
+  // rows render a flat placeholder so the layout still reserves space.
+  canvas._sheet = sheet;
+  canvas._url = `/api/fishanims/${encodeURIComponent(name)}/${sheet.idx}/sheet`;
+  canvas._name = name;
+  drawPlaceholder(canvas);
+  // If a previous reveal toggle for this fish persists across re-renders,
+  // honour it on remount.
+  if (revealedRows.has(name)) {
+    loadSheet(canvas);
+  }
+
+  return cell;
+}
+
+// Flat dark placeholder — drawn for every cell on creation and after a
+// hide so the canvas isn't blank-white in the gallery grid.
+function drawPlaceholder(canvas) {
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1a1428';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+// Lazy-load the sprite sheet for a single canvas. Caches the loaded
+// Image on the canvas so repeated reveal toggles after the first don't
+// re-fetch. Once loaded, picks up whatever the row's reveal state is
+// at that moment.
+function loadSheet(canvas) {
+  if (canvas._img) {
+    // Already loaded — just react to current reveal state.
+    if (revealedRows.has(canvas._name)) {
+      startAnimate(canvas, canvas._img, canvas._sheet);
+    } else {
+      drawFrame0(canvas, canvas._img, canvas._sheet);
+    }
+    return;
+  }
+  if (canvas._loading) return;
+  canvas._loading = true;
   const img = new Image();
-  img.src = `/api/fishanims/${encodeURIComponent(name)}/${sheet.idx}/sheet`;
+  img.src = canvas._url;
   img.onload = () => {
     canvas._img = img;
-    canvas._sheet = sheet;
-    if (revealedRows.has(name)) {
-      startAnimate(canvas, img, sheet);
+    canvas._loading = false;
+    if (revealedRows.has(canvas._name)) {
+      startAnimate(canvas, img, canvas._sheet);
     } else {
-      drawFrame0(canvas, img, sheet);
+      drawFrame0(canvas, img, canvas._sheet);
     }
   };
   img.onerror = () => {
+    canvas._loading = false;
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#3a2030';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   };
-
-  return cell;
 }
 
 function drawFrame0(canvas, img, sheet) {
@@ -207,9 +250,9 @@ function startAnimate(canvas, img, sheet) {
 
 function stopAnimate(canvas) {
   canvas._animating = false;
-  if (canvas._img && canvas._sheet) {
-    drawFrame0(canvas, canvas._img, canvas._sheet);
-  }
+  // Hidden state — fall back to the flat placeholder so no fish image
+  // is visible until the user explicitly re-reveals.
+  drawPlaceholder(canvas);
 }
 
 function toggleReveal(name, rowEl) {
@@ -220,7 +263,9 @@ function toggleReveal(name, rowEl) {
   } else {
     revealedRows.add(name);
     for (const c of rowEl.querySelectorAll('canvas')) {
-      if (c._img && c._sheet) startAnimate(c, c._img, c._sheet);
+      // First reveal triggers the lazy fetch + animate; subsequent
+      // reveals reuse the cached Image so the page doesn't re-load.
+      loadSheet(c);
     }
   }
   const btn = rowEl.querySelector('.reveal-btn');
@@ -291,6 +336,67 @@ async function regenFish(name, button) {
   }
 }
 
+// Replace the reference image used to generate a fish's animations. Goes
+// straight to MongoDB so the upload survives Render dyno restarts. The
+// next Regen for this fish picks up the new reference automatically.
+async function uploadRef(name, file, button, refImg) {
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    alert(`File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). 8MB max.`);
+    return;
+  }
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'uploading…';
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch(`/api/fishanims/${encodeURIComponent(name)}/ref`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: fd,
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      throw new Error(`${r.status} ${text.slice(0, 160)}`);
+    }
+    // Force the row's ref preview to refresh (cache-bust query param).
+    if (refImg) {
+      refImg.src = `/api/fishanims/${encodeURIComponent(name)}/ref?t=${Date.now()}`;
+    }
+    // Flag so the row re-renders with the "Custom" badge + reset btn.
+    customRefs.add(name);
+    lastListKey = '';
+    tick();
+  } catch (e) {
+    alert(`upload failed: ${e.message}`);
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function resetRef(name, button) {
+  if (!confirm(`Reset ${name} back to the default reference image?\n(Your uploaded image will be deleted. Regen to apply.)`)) {
+    return;
+  }
+  button.disabled = true;
+  button.textContent = '…';
+  try {
+    const r = await fetch(`/api/fishanims/${encodeURIComponent(name)}/ref`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    customRefs.delete(name);
+    lastListKey = '';
+    tick();
+  } catch (e) {
+    alert(`reset failed: ${e.message}`);
+    button.disabled = false;
+    button.textContent = '↺ default';
+  }
+}
+
 function renderGrid(rows) {
   const grid = document.getElementById('grid');
   grid.innerHTML = '';
@@ -303,10 +409,58 @@ function renderGrid(rows) {
     const isComplete = row.sheets.length >= 5;
     const isSkipped = skippedFish.has(row.name);
     const isQueued = regenQueue.has(row.name);
+    const hasCustomRef = !!row.hasCustomRef || customRefs.has(row.name);
 
     const name = document.createElement('div');
     name.className = 'row-name';
-    name.innerHTML = `<div class="row-name-text">${row.name}<small>${row.sheets.length}/5 sheets</small></div>`;
+
+    // Reference image preview — clicking it opens the file picker so the
+    // thumbnail itself is the upload affordance, not just the small button.
+    const refWrap = document.createElement('div');
+    refWrap.className = 'ref-wrap';
+    refWrap.title = 'Click to upload a new reference image';
+
+    const refImg = document.createElement('img');
+    refImg.className = 'ref-img';
+    refImg.alt = `${row.name} reference`;
+    refImg.loading = 'lazy';
+    refImg.src = `/api/fishanims/${encodeURIComponent(row.name)}/ref`;
+    refImg.onerror = () => {
+      // No on-disk default AND no upload yet — show a placeholder tile
+      // so the row layout doesn't collapse.
+      refImg.style.display = 'none';
+      refWrap.classList.add('ref-empty');
+      refWrap.textContent = 'no ref';
+    };
+    refWrap.appendChild(refImg);
+
+    if (hasCustomRef) {
+      const badge = document.createElement('span');
+      badge.className = 'ref-badge';
+      badge.textContent = 'CUSTOM';
+      refWrap.appendChild(badge);
+    }
+
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/png,image/jpeg,image/webp';
+    fileInput.style.display = 'none';
+    refWrap.appendChild(fileInput);
+
+    refWrap.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (file) uploadRef(row.name, file, uploadBtn, refImg);
+      fileInput.value = '';  // allow re-selecting the same file
+    });
+
+    name.appendChild(refWrap);
+
+    const nameText = document.createElement('div');
+    nameText.className = 'row-name-text';
+    nameText.innerHTML = `${row.name}<small>${row.sheets.length}/5 sheets</small>`;
+    name.appendChild(nameText);
+
     const genPill = document.createElement('div');
     genPill.className = 'gen-pill';
     genPill.hidden = true;
@@ -314,6 +468,27 @@ function renderGrid(rows) {
 
     const btnRow = document.createElement('div');
     btnRow.className = 'btn-row';
+
+    // Upload button — separate from the thumbnail so keyboard / screen-
+    // reader users have an explicit control. Always enabled.
+    const uploadBtn = document.createElement('button');
+    uploadBtn.type = 'button';
+    uploadBtn.className = 'upload-btn';
+    uploadBtn.textContent = hasCustomRef ? '↑ replace' : '↑ upload';
+    uploadBtn.title = 'Upload a new reference image — used the next time you Regen this fish';
+    uploadBtn.addEventListener('click', () => fileInput.click());
+    btnRow.appendChild(uploadBtn);
+
+    // Reset button — only shown when a custom ref is currently in place.
+    if (hasCustomRef) {
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'reset-btn';
+      resetBtn.textContent = '↺ default';
+      resetBtn.title = 'Drop the uploaded ref so the next Regen uses the on-disk default';
+      resetBtn.addEventListener('click', () => resetRef(row.name, resetBtn));
+      btnRow.appendChild(resetBtn);
+    }
 
     // Skip button — clicking when already skipped reverses it (un-skip).
     const skipBtn = document.createElement('button');
@@ -495,6 +670,11 @@ async function tick() {
 
   if (list) {
     document.getElementById('count').textContent = `${list.count} fish`;
+    // Resync the customRefs cache from the server payload so a refresh
+    // (or another browser tab uploading) picks up the badge state.
+    customRefs = new Set(
+      (list.rows || []).filter(r => r.hasCustomRef).map(r => r.name),
+    );
     // Use augmented rows so the currently-generating fish + skipped fish
     // appear in the grid even when they have 0 sheets yet.
     const augmented = augmentRows(list.rows, status);

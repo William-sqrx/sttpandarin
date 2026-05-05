@@ -64,6 +64,18 @@ def fish_anims_skips_col() -> Collection:
     return col
 
 
+def fish_anims_refs_col() -> Collection:
+    """User-uploaded reference images, one per species:
+    { name, ref (Binary), content_type, uploaded_at }. The batch worker
+    prefers this over the on-disk default in 'Chinesely Fish (256)/' when
+    generating, so users can swap a fish's source image without touching
+    the repo. Mongo storage means uploads survive Render dyno restarts
+    (the disk is ephemeral)."""
+    col = _client()[DB_NAME]["fish_anims_refs"]
+    col.create_index("name", unique=True, name="name_unique")
+    return col
+
+
 def _norm(s: str) -> str:
     return (s or "").strip()
 

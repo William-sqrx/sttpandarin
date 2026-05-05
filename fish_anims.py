@@ -19,10 +19,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from bson import Binary
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from db import fish_anims_col, fish_anims_skips_col
+from db import fish_anims_col, fish_anims_refs_col, fish_anims_skips_col
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
@@ -30,6 +30,8 @@ INPUT_DIR = APP_DIR / "Chinesely Fish (256)"
 PER_FISH = 5
 KEEPALIVE_SECS = 60
 MAX_CONSECUTIVE_FAILS = 8  # auto-stop after this many back-to-back failures
+MAX_REF_BYTES = 8 * 1024 * 1024  # 8 MB ceiling on uploaded reference images
+ALLOWED_REF_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
@@ -38,6 +40,33 @@ def _safe_name(name: str) -> str:
     if not _NAME_RE.match(name):
         raise HTTPException(400, "bad name")
     return name
+
+
+def _get_ref_bytes(stem: str, png_path: Path | None) -> bytes:
+    """Return the reference image bytes for `stem`. Prefers a user-uploaded
+    ref from MongoDB; falls back to the on-disk default in INPUT_DIR.
+    Raises FileNotFoundError if neither source has bytes for this stem."""
+    try:
+        doc = fish_anims_refs_col().find_one({"name": stem}, {"ref": 1})
+        if doc and doc.get("ref"):
+            return bytes(doc["ref"])
+    except Exception as e:  # noqa: BLE001
+        print(f"[fishanims] read custom ref {stem}: {e}", flush=True)
+    if png_path is not None and png_path.exists():
+        return png_path.read_bytes()
+    raise FileNotFoundError(f"no reference image available for '{stem}'")
+
+
+def _disk_stems() -> list[str]:
+    """Sorted list of every species stem in INPUT_DIR. Used by the list
+    endpoint so disk-only fish (no sheets generated yet, no custom ref)
+    still appear with an Upload button."""
+    if not INPUT_DIR.is_dir():
+        return []
+    return sorted(
+        p.stem for p in INPUT_DIR.glob("*.png")
+        if any(c.isalpha() for c in p.stem)
+    )
 
 
 # ----- Batch background runner ----------------------------------------------
@@ -235,17 +264,22 @@ def _drain_regen_queue(col, pngs) -> None:
             if not _regen_queue or _stop_flag.is_set():
                 return
             stem = _regen_queue.pop(0)
+        # `png` may be None for a fish that only has an uploaded custom
+        # ref (no disk default) — that's fine, _get_ref_bytes handles it.
         png = next((p for p in pngs if p.stem == stem), None)
-        if png is None:
-            print(f"[fishanims] regen: unknown fish '{stem}', skipped",
-                  flush=True)
-            continue
         deleted = col.delete_many({"name": stem}).deleted_count
         print(f"[fishanims] regen: wiping {stem} ({deleted} existing) → 5 fresh",
               flush=True)
         with _lock:
             _status.total += PER_FISH
-        ref_bytes = png.read_bytes()
+        try:
+            ref_bytes = _get_ref_bytes(stem, png)
+        except FileNotFoundError as e:
+            with _lock:
+                _status.failed += PER_FISH
+                _status.last_error = str(e)
+            print(f"[fishanims] regen FAIL {stem}: {e}", flush=True)
+            continue
         for idx in range(1, PER_FISH + 1):
             if _stop_flag.is_set():
                 return
@@ -283,7 +317,14 @@ def _batch_loop() -> None:
             if _stop_flag.is_set():
                 break
             stem = png.stem
-            ref_bytes = png.read_bytes()
+            try:
+                ref_bytes = _get_ref_bytes(stem, png)
+            except FileNotFoundError as e:
+                with _lock:
+                    _status.failed += PER_FISH
+                    _status.last_error = str(e)
+                print(f"[fishanims] FAIL {stem}: {e}", flush=True)
+                continue
             for idx in range(1, PER_FISH + 1):
                 if _stop_flag.is_set():
                     break
@@ -371,8 +412,30 @@ async def fishanims_list(request: Request) -> JSONResponse:
                 "frameW": d.get("frameW", 256),
                 "frameH": d.get("frameH", 256),
             })
+
+        # Make sure every disk-side species has a row even when it has no
+        # generated sheets yet — otherwise the user can't see an Upload
+        # button for fish that haven't been animated yet.
+        for stem in _disk_stems():
+            rows_map.setdefault(stem, [])
+
+        # Mark which species have a user-uploaded reference so the
+        # frontend can surface a "custom ref" badge + a reset button.
+        try:
+            custom_refs = {
+                d["name"]
+                for d in fish_anims_refs_col().find({}, {"name": 1})
+            }
+        except Exception as e:  # noqa: BLE001
+            print(f"[fishanims] read custom refs: {e}", flush=True)
+            custom_refs = set()
+
         rows = [
-            {"name": n, "sheets": s}
+            {
+                "name": n,
+                "sheets": s,
+                "hasCustomRef": n in custom_refs,
+            }
             for n, s in sorted(rows_map.items(), key=lambda kv: kv[0].lower())
         ]
         return JSONResponse({"rows": rows, "count": len(rows)})
@@ -510,3 +573,89 @@ async def fishanims_download(name: str, idx: str, request: Request) -> Response:
             "Cache-Control": "no-store",
         },
     )
+
+
+# ----- Per-fish reference image upload --------------------------------------
+# The batch worker reads the reference image when generating each sprite
+# sheet. By default that's the on-disk PNG in 'Chinesely Fish (256)/', but
+# users can upload a replacement here that gets persisted to MongoDB and
+# preferred by `_get_ref_bytes`. Re-running Regen for the fish then
+# produces 5 fresh sheets driven by the uploaded image.
+
+@router.get("/api/fishanims/{name}/ref")
+async def fishanims_get_ref(name: str, request: Request) -> Response:
+    """Serve the current reference image — uploaded if present, otherwise
+    the on-disk default. Returns 404 only when neither source has bytes
+    (e.g. an unknown species name)."""
+    name = _safe_name(name)
+    doc = fish_anims_refs_col().find_one(
+        {"name": name},
+        {"ref": 1, "content_type": 1},
+    )
+    if doc and doc.get("ref"):
+        return Response(
+            content=bytes(doc["ref"]),
+            media_type=doc.get("content_type") or "image/png",
+            headers={"Cache-Control": "no-store"},
+        )
+    disk = INPUT_DIR / f"{name}.png"
+    if disk.exists():
+        return Response(
+            content=disk.read_bytes(),
+            media_type="image/png",
+            headers={"Cache-Control": "no-store"},
+        )
+    raise HTTPException(404, "no reference image for this fish")
+
+
+@router.post("/api/fishanims/{name}/ref")
+async def fishanims_upload_ref(
+    name: str,
+    request: Request,
+    file: UploadFile = File(...),
+) -> JSONResponse:
+    """Replace the reference image for `name`. Stored in MongoDB so it
+    survives Render dyno restarts. The next Regen for this fish will use
+    the uploaded image instead of the on-disk default."""
+    name = _safe_name(name)
+    content_type = (file.content_type or "").lower()
+    if content_type not in ALLOWED_REF_TYPES:
+        raise HTTPException(
+            400,
+            f"unsupported image type '{content_type}' "
+            f"(use png, jpg, or webp)",
+        )
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "empty upload")
+    if len(data) > MAX_REF_BYTES:
+        raise HTTPException(
+            413,
+            f"file too large ({len(data)//1024}KB > "
+            f"{MAX_REF_BYTES//1024}KB max)",
+        )
+    fish_anims_refs_col().update_one(
+        {"name": name},
+        {"$set": {
+            "name": name,
+            "ref": Binary(data),
+            "content_type": content_type,
+            "uploaded_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+    return JSONResponse({
+        "ok": True,
+        "name": name,
+        "bytes": len(data),
+        "content_type": content_type,
+    })
+
+
+@router.delete("/api/fishanims/{name}/ref")
+async def fishanims_delete_ref(name: str, request: Request) -> JSONResponse:
+    """Drop the uploaded reference for `name` so the next generation
+    falls back to the on-disk default. No-op if no upload exists."""
+    name = _safe_name(name)
+    res = fish_anims_refs_col().delete_one({"name": name})
+    return JSONResponse({"ok": True, "deleted": res.deleted_count})
