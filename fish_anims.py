@@ -574,8 +574,11 @@ async def fishanims_batch_status(request: Request) -> JSONResponse:
             "last_error": _status.last_error,
             "started_at": _status.started_at,
             "finished_at": _status.finished_at,
-            "skipped_fish": sorted(_skip_fish),
-            "regen_queue": list(_regen_queue),
+            # Filter to ALLOWED_STEMS — persisted skips survive deploys, so
+            # an adult fish skipped before the allowlist existed would
+            # otherwise be re-added as a row by the frontend's augmentRows.
+            "skipped_fish": sorted(s for s in _skip_fish if s in ALLOWED_STEMS),
+            "regen_queue": [r for r in _regen_queue if r in ALLOWED_STEMS],
         })
 
 
