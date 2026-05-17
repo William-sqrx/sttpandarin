@@ -47,7 +47,7 @@ const POLL_MS = 5000;
   };
 
   function drawIdle(text) {
-    ctx.fillStyle = '#0a0c10';
+    ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     if (text) {
       ctx.fillStyle = '#aab2c0';
@@ -62,7 +62,8 @@ const POLL_MS = 5000;
     if (!img) return;
     const col = frameIdx % cols;
     const row = Math.floor(frameIdx / cols);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(
       img,
       col * frameW, row * frameH,
@@ -394,7 +395,7 @@ function makeCell(name, sheet) {
 // hide so the canvas isn't blank-white in the gallery grid.
 function drawPlaceholder(canvas) {
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#1a1428';
+  ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
@@ -436,7 +437,8 @@ function loadSheet(canvas) {
 function drawFrame0(canvas, img, sheet) {
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(
     img,
     0, 0, sheet.frameW, sheet.frameH,
@@ -455,7 +457,8 @@ function startAnimate(canvas, img, sheet) {
   const tick = (now) => {
     if (!canvas.isConnected || !canvas._animating) return;
     if (now - last >= FRAME_MS) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(
         img,
         i * sheet.frameW, 0,

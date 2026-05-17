@@ -35,6 +35,20 @@ ALLOWED_REF_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
+# Only these species are surfaced in the gallery / batch — and only their
+# baby + teen stages (no adult). Disk PNGs or MongoDB sheets outside this
+# set are filtered out everywhere (list endpoint + batch loop).
+_ALLOWED_SPECIES = (
+    "angelfish", "axolotl", "boxfish", "clownfish", "coralbeauty",
+    "dolphin", "hammerhead", "harlequin", "jawfish", "jellyfish",
+    "koi", "lionfish", "mandarin", "mantaray", "octopus",
+    "pufferfish", "rasbora", "royalgramma", "seadragon", "seahorse",
+    "shark", "sunfish", "trout", "whale", "yellowtang", "zebrafish",
+)
+ALLOWED_STEMS = frozenset(
+    f"{stage}{sp}" for sp in _ALLOWED_SPECIES for stage in ("baby", "teen")
+)
+
 
 def _safe_name(name: str) -> str:
     if not _NAME_RE.match(name):
@@ -65,7 +79,7 @@ def _disk_stems() -> list[str]:
         return []
     return sorted(
         p.stem for p in INPUT_DIR.glob("*.png")
-        if any(c.isalpha() for c in p.stem)
+        if any(c.isalpha() for c in p.stem) and p.stem in ALLOWED_STEMS
     )
 
 
@@ -306,7 +320,8 @@ def _batch_loop() -> None:
             return
 
         pngs = sorted(p for p in INPUT_DIR.glob("*.png")
-                      if any(c.isalpha() for c in p.stem))
+                      if any(c.isalpha() for c in p.stem)
+                      and p.stem in ALLOWED_STEMS)
         with _lock:
             _status.total = len(pngs) * PER_FISH
 
@@ -437,6 +452,7 @@ async def fishanims_list(request: Request) -> JSONResponse:
                 "hasCustomRef": n in custom_refs,
             }
             for n, s in sorted(rows_map.items(), key=lambda kv: kv[0].lower())
+            if n in ALLOWED_STEMS
         ]
         return JSONResponse({"rows": rows, "count": len(rows)})
     except Exception as e:  # noqa: BLE001

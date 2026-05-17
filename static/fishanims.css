@@ -226,7 +226,7 @@ main {
 #sandbox-canvas {
   width: 100%;
   aspect-ratio: 1 / 1;
-  background: #0a0c10;
+  background: #000;
   border: 1px solid var(--line);
   border-radius: 8px;
   image-rendering: pixelated;
@@ -548,7 +548,7 @@ main {
 .cell canvas {
   width: 100%;
   aspect-ratio: 1 / 1;
-  background: #0a0c10;
+  background: #000;
   border-radius: 6px;
   image-rendering: pixelated;
 }
