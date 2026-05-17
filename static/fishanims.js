@@ -6,8 +6,10 @@ const FRAME_MS = 100;
 const POLL_MS = 5000;
 
 // ----- Sandbox: upload-and-animate any sprite sheet -------------------------
-// Self-contained. Frame count = round(sheet_width / sheet_height) — the same
-// horizontally-tiled square-frame convention used everywhere else in the app.
+// Self-contained. Supports both a horizontal strip (cols×1) and a full grid
+// (cols×rows) — frames are read left-to-right, top-to-bottom. The `frames`
+// field trims trailing empty cells (e.g. a 5×5 sheet with the bottom-right
+// cell blank → cols 5, rows 5, frames 24).
 (function initSandbox() {
   const drop = document.getElementById('sandbox-drop');
   const fileInput = document.getElementById('sandbox-file');
@@ -17,6 +19,9 @@ const POLL_MS = 5000;
   const fpsLabel = document.getElementById('sandbox-fps-val');
   const toggleBtn = document.getElementById('sandbox-toggle');
   const clearBtn = document.getElementById('sandbox-clear');
+  const colsInput = document.getElementById('sandbox-cols');
+  const rowsInput = document.getElementById('sandbox-rows');
+  const framesInput = document.getElementById('sandbox-frames');
   if (!drop || !canvas) return;
 
   const ctx = canvas.getContext('2d');
@@ -24,6 +29,9 @@ const POLL_MS = 5000;
 
   let img = null;
   let objectUrl = null;
+  let fileName = '';
+  let cols = 1;
+  let rows = 1;
   let frames = 1;
   let frameW = 256;
   let frameH = 256;
@@ -31,6 +39,12 @@ const POLL_MS = 5000;
   let frameIdx = 0;
   let lastTick = 0;
   let rafId = 0;
+
+  const clampInt = (v, lo, hi, dflt) => {
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n)) return dflt;
+    return Math.min(hi, Math.max(lo, n));
+  };
 
   function drawIdle(text) {
     ctx.fillStyle = '#0a0c10';
@@ -46,14 +60,46 @@ const POLL_MS = 5000;
 
   function drawFrame() {
     if (!img) return;
+    const col = frameIdx % cols;
+    const row = Math.floor(frameIdx / cols);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(
       img,
-      frameIdx * frameW, 0,
+      col * frameW, row * frameH,
       frameW, frameH,
       0, 0,
       canvas.width, canvas.height,
     );
+  }
+
+  // Recompute frame geometry from the cols/rows/frames inputs + current image.
+  // Called on load and whenever the user edits a grid field. Normalises the
+  // input values (clamps, caps frames at cols*rows) and reflects them back.
+  function reframe() {
+    if (!img) return;
+    cols = clampInt(colsInput.value, 1, 40, 1);
+    rows = clampInt(rowsInput.value, 1, 40, 1);
+    const maxFrames = cols * rows;
+    frames = clampInt(framesInput.value, 1, maxFrames, maxFrames);
+    frameW = Math.round(img.naturalWidth / cols);
+    frameH = Math.round(img.naturalHeight / rows);
+
+    colsInput.value = cols;
+    rowsInput.value = rows;
+    framesInput.value = frames;
+    framesInput.max = maxFrames;
+
+    // Canvas buffer = one frame so drawImage scales 1:1; CSS aspect-ratio
+    // follows the frame so non-square frames aren't squished.
+    canvas.width = frameW;
+    canvas.height = frameH;
+    canvas.style.aspectRatio = `${frameW} / ${frameH}`;
+    frameIdx = 0;
+    meta.textContent =
+      `${fileName} · ${img.naturalWidth}×${img.naturalHeight} · `
+      + `${cols}×${rows} grid · `
+      + `${frames} frame${frames === 1 ? '' : 's'} of ${frameW}×${frameH}`;
+    drawFrame();
   }
 
   function loop(now) {
@@ -86,14 +132,21 @@ const POLL_MS = 5000;
   function clearSheet() {
     pauseLoop();
     img = null;
+    fileName = '';
     if (objectUrl) {
       URL.revokeObjectURL(objectUrl);
       objectUrl = null;
     }
+    cols = 1;
+    rows = 1;
     frames = 1;
     frameIdx = 0;
+    colsInput.value = 1;
+    rowsInput.value = 1;
+    framesInput.value = 1;
     canvas.width = 256;
     canvas.height = 256;
+    canvas.style.aspectRatio = '1 / 1';
     drawIdle('no sheet loaded');
     meta.textContent = 'no sheet loaded';
     toggleBtn.disabled = true;
@@ -112,20 +165,19 @@ const POLL_MS = 5000;
     const next = new Image();
     next.onload = () => {
       img = next;
-      frameH = next.naturalHeight;
-      frames = Math.max(1, Math.round(next.naturalWidth / next.naturalHeight));
-      frameW = Math.round(next.naturalWidth / frames);
-      // Keep canvas pixel buffer = one frame so drawImage scales 1:1
-      // and CSS handles the on-page size.
-      canvas.width = frameW;
-      canvas.height = frameH;
-      frameIdx = 0;
-      meta.textContent =
-        `${file.name} · ${next.naturalWidth}×${next.naturalHeight} · `
-        + `${frames} frame${frames === 1 ? '' : 's'} of ${frameW}×${frameH}`;
+      fileName = file.name;
+      // First guess: a horizontal strip of square frames (the convention
+      // used elsewhere in the app). Grid sheets won't match — the user
+      // sets cols/rows by hand and reframe() picks it up.
+      const guessCols = Math.max(
+        1, Math.round(next.naturalWidth / next.naturalHeight),
+      );
+      colsInput.value = guessCols;
+      rowsInput.value = 1;
+      framesInput.value = guessCols;
+      reframe();
       toggleBtn.disabled = false;
       clearBtn.disabled = false;
-      drawFrame();
       startLoop();
     };
     next.onerror = () => {
@@ -159,6 +211,12 @@ const POLL_MS = 5000;
 
   fpsRange.addEventListener('input', () => {
     fpsLabel.textContent = fpsRange.value;
+  });
+
+  // Re-slice the sheet whenever a grid field changes. Animation keeps
+  // running — reframe() resets frameIdx so playback restarts cleanly.
+  [colsInput, rowsInput, framesInput].forEach((el) => {
+    el.addEventListener('change', reframe);
   });
 
   toggleBtn.addEventListener('click', () => {

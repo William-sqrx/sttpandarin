@@ -280,6 +280,33 @@ main {
   cursor: default;
   opacity: 0.5;
 }
+.sandbox-grid {
+  display: flex;
+  gap: 8px;
+}
+.sandbox-grid label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.sandbox-grid input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.sandbox-grid input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 @media (max-width: 720px) {
   .sandbox-body { grid-template-columns: 1fr; }
 }

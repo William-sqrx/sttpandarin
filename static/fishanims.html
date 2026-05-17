@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fish Animations Gallery — Chinesely</title>
-<link rel="stylesheet" href="/static/fishanims.css?v=11">
+<link rel="stylesheet" href="/static/fishanims.css?v=12">
 </head>
 <body>
 <header class="topbar">
@@ -36,7 +36,7 @@
   <section class="sandbox" aria-label="Sprite sheet sandbox">
     <header class="sandbox-head">
       <h2>Sprite sheet sandbox</h2>
-      <p>Drop a sheet to preview it animated. Frames are auto-detected (square frames laid out horizontally).</p>
+      <p>Drop a sheet to preview it animated. Set <strong>cols</strong> × <strong>rows</strong> for grid sheets; lower <strong>frames</strong> to skip trailing empty cells.</p>
     </header>
     <div class="sandbox-body">
       <label id="sandbox-drop" class="sandbox-drop" for="sandbox-file">
@@ -50,6 +50,11 @@
         <canvas id="sandbox-canvas" width="256" height="256"></canvas>
         <div id="sandbox-meta" class="sandbox-meta">no sheet loaded</div>
         <div class="sandbox-controls">
+          <div class="sandbox-grid">
+            <label>cols<input id="sandbox-cols" type="number" min="1" max="40" value="1"></label>
+            <label>rows<input id="sandbox-rows" type="number" min="1" max="40" value="1"></label>
+            <label>frames<input id="sandbox-frames" type="number" min="1" value="1"></label>
+          </div>
           <label class="sandbox-fps">
             FPS <span id="sandbox-fps-val">10</span>
             <input id="sandbox-fps" type="range" min="1" max="30" value="10">
@@ -68,6 +73,6 @@
   </div>
 </main>
 
-<script src="/static/fishanims.js?v=11"></script>
+<script src="/static/fishanims.js?v=12"></script>
 </body>
 </html>
