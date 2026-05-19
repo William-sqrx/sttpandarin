@@ -95,11 +95,16 @@ def veo_configured() -> tuple[bool, str]:
     return True, ""
 
 
-def generate_videos(ref_png: bytes) -> list[bytes]:
+def generate_videos(ref_png: bytes, should_stop=None) -> list[bytes]:
     """Animate one fish reference image into VEO_VIDEOS_PER_CALL looping MP4
     clips via Veo 3.1 on Vertex AI. The reference is used as the first AND
     last frame so each clip is a seamless loop. Blocks until Veo finishes
     (typically a few minutes). Returns the raw MP4 bytes for every clip.
+
+    `should_stop`, if given, is a no-arg callable polled once a second while
+    waiting on Veo — when it returns True the wait is abandoned and a
+    RuntimeError is raised, so a Stop press takes effect within ~1s instead
+    of hanging until the generation finishes.
 
     Raises RuntimeError on any failure — the caller handles retry/counters.
     """
@@ -131,7 +136,11 @@ def generate_videos(ref_png: bytes) -> list[bytes]:
     while not operation.done:
         if time.time() > deadline:
             raise RuntimeError(f"Veo timed out after {VEO_TIMEOUT_SECS}s")
-        time.sleep(VEO_POLL_SECS)
+        # Sleep in 1s slices so a Stop press is noticed promptly.
+        for _ in range(VEO_POLL_SECS):
+            if should_stop and should_stop():
+                raise RuntimeError("Veo wait aborted — stop requested")
+            time.sleep(1)
         operation = client.operations.get(operation)
 
     response = operation.result
@@ -271,8 +280,11 @@ def video_to_sprite_sheet(mp4_bytes: bytes):
     if any(sampled[p] is None for p in range(unique)):
         raise RuntimeError("failed to sample every frame from the clip")
 
-    # Closing frame == opening frame — the sprite sheet's last frame is the
-    # first, so the loop has no seam.
+    # The final cell repeats frame 0 — so the sheet's last frame == its
+    # first frame — but it is NOT one of the played frames: playback runs
+    # the `unique` frames 0..unique-1 and wraps straight back to 0. Playing
+    # the duplicate would show frame 0 twice in a row (a visible pause); the
+    # repeated cell is kept only as the conventional closing frame.
     sampled[SHEET_FRAMES - 1] = sampled[0]
 
     crop_h, crop_w = y1 - y0, x1 - x0
@@ -292,4 +304,6 @@ def video_to_sprite_sheet(mp4_bytes: bytes):
 
     buf = io.BytesIO()
     sheet.save(buf, format="PNG")
-    return buf.getvalue(), SHEET_COLS, SHEET_ROWS, SHEET_FRAMES, cell_w, cell_h
+    # `frames` is the PLAYED count (unique) — excludes the duplicate closing
+    # cell so playback wraps unique-1 -> 0 with no doubled frame / pause.
+    return buf.getvalue(), SHEET_COLS, SHEET_ROWS, unique, cell_w, cell_h

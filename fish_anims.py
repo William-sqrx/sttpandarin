@@ -270,15 +270,26 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
     videos: list[bytes] | None = None
     last_err: Exception | None = None
     for attempt in (1, 2):
+        if _stop_flag.is_set():
+            break
         try:
-            videos = veo_gen.generate_videos(ref_black)
+            videos = veo_gen.generate_videos(
+                ref_black, should_stop=_stop_flag.is_set)
             break
         except Exception as e:  # noqa: BLE001
             last_err = e
             print(f"[fishanims] veo try {attempt} {stem}{label}: {e}", flush=True)
+            # A Stop press aborts the Veo wait — don't burn a retry on it.
+            if _stop_flag.is_set():
+                break
             if attempt < 2:
                 time.sleep(10)
     if not videos:
+        if _stop_flag.is_set():
+            # Aborted by a Stop press — not a failure, leave counters alone.
+            print(f"[fishanims] {stem}{label}: aborted (stop requested)",
+                  flush=True)
+            return False
         with _lock:
             _status.failed += PER_FISH
             _status.last_error = f"{stem}{label}: {last_err}"
@@ -293,6 +304,8 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
 
     saved = 0
     for idx, mp4 in enumerate(videos[:PER_FISH], start=1):
+        if _stop_flag.is_set():
+            break
         try:
             sheet_png, cols, rows, frames, fw, fh = \
                 veo_gen.video_to_sprite_sheet(mp4)
@@ -410,7 +423,12 @@ def _batch_loop() -> None:
                 print(f"[fishanims] FAIL {stem}: {e}", flush=True)
                 continue
 
-            if _generate_and_save_fish(col, stem, ref_bytes):
+            ok = _generate_and_save_fish(col, stem, ref_bytes)
+            # A Stop press aborts the fish mid-way — that's not a real
+            # failure, so don't let it trip the auto-stop counter.
+            if _stop_flag.is_set():
+                break
+            if ok:
                 consecutive_fails = 0
             else:
                 consecutive_fails += 1
