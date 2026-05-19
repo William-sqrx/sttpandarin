@@ -95,16 +95,18 @@ def veo_configured() -> tuple[bool, str]:
     return True, ""
 
 
-def generate_videos(ref_png: bytes, should_stop=None) -> list[bytes]:
+def generate_videos(ref_png: bytes, should_stop=None,
+                    prompt: str | None = None) -> list[bytes]:
     """Animate one fish reference image into VEO_VIDEOS_PER_CALL looping MP4
     clips via Veo 3.1 on Vertex AI. The reference is used as the first AND
     last frame so each clip is a seamless loop. Blocks until Veo finishes
     (typically a few minutes). Returns the raw MP4 bytes for every clip.
 
-    `should_stop`, if given, is a no-arg callable polled once a second while
-    waiting on Veo — when it returns True the wait is abandoned and a
-    RuntimeError is raised, so a Stop press takes effect within ~1s instead
-    of hanging until the generation finishes.
+    `prompt`, if given (and non-blank), is the text sent to Veo; otherwise
+    the built-in VEO_PROMPT is used. `should_stop`, if given, is a no-arg
+    callable polled once a second while waiting on Veo — when it returns
+    True the wait is abandoned and a RuntimeError is raised, so a Stop press
+    takes effect within ~1s instead of hanging until generation finishes.
 
     Raises RuntimeError on any failure — the caller handles retry/counters.
     """
@@ -116,7 +118,8 @@ def generate_videos(ref_png: bytes, should_stop=None) -> list[bytes]:
     )
     ref_image = types.Image(image_bytes=ref_png, mime_type="image/png")
 
-    source = types.GenerateVideosSource(prompt=VEO_PROMPT, image=ref_image)
+    prompt_text = (prompt or "").strip() or VEO_PROMPT
+    source = types.GenerateVideosSource(prompt=prompt_text, image=ref_image)
     config = types.GenerateVideosConfig(
         aspect_ratio="16:9",
         number_of_videos=VEO_VIDEOS_PER_CALL,

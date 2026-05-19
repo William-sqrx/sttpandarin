@@ -25,7 +25,12 @@ from bson import Binary
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from db import fish_anims_col, fish_anims_refs_col, fish_anims_skips_col
+from db import (
+    fish_anims_col,
+    fish_anims_refs_col,
+    fish_anims_settings_col,
+    fish_anims_skips_col,
+)
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
@@ -36,6 +41,8 @@ MAX_CONSECUTIVE_FAILS = 3  # auto-stop after this many back-to-back fish failure
 MAX_REF_BYTES = 8 * 1024 * 1024  # 8 MB ceiling on uploaded reference images
 MAX_SHEET_BYTES = 15 * 1024 * 1024  # stay under MongoDB's 16 MB document limit
 ALLOWED_REF_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
+_VEO_PROMPT_KEY = "veo_prompt"       # settings-collection key for the editable prompt
+MAX_PROMPT_CHARS = 12000             # ceiling on a user-supplied Veo prompt
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
@@ -229,6 +236,20 @@ def _flatten_to_black(data: bytes) -> bytes:
         return data
 
 
+def _get_veo_prompt() -> str:
+    """The Veo prompt to send — the user-edited override saved in MongoDB,
+    or veo_gen.VEO_PROMPT if none has been saved (or the read fails)."""
+    import veo_gen  # noqa: WPS433
+    try:
+        doc = fish_anims_settings_col().find_one(
+            {"key": _VEO_PROMPT_KEY}, {"value": 1})
+        if doc and isinstance(doc.get("value"), str) and doc["value"].strip():
+            return doc["value"]
+    except Exception as e:  # noqa: BLE001
+        print(f"[fishanims] read veo prompt: {e}", flush=True)
+    return veo_gen.VEO_PROMPT
+
+
 def _save_sheet_doc(col, stem: str, idx: int, doc: dict, label: str) -> bool:
     """Persist one sprite-sheet doc to MongoDB with retry/backoff. Returns
     True on a confirmed write."""
@@ -266,6 +287,7 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
     # The reference is transparent; Veo needs an opaque image and the
     # crop step needs a clean background — composite onto black first.
     ref_black = _flatten_to_black(ref_bytes)
+    prompt = _get_veo_prompt()
 
     videos: list[bytes] | None = None
     last_err: Exception | None = None
@@ -274,7 +296,7 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
             break
         try:
             videos = veo_gen.generate_videos(
-                ref_black, should_stop=_stop_flag.is_set)
+                ref_black, should_stop=_stop_flag.is_set, prompt=prompt)
             break
         except Exception as e:  # noqa: BLE001
             last_err = e
@@ -657,6 +679,53 @@ async def fishanims_batch_status(request: Request) -> JSONResponse:
             "skipped_fish": sorted(s for s in _skip_fish if s in ALLOWED_STEMS),
             "regen_queue": [r for r in _regen_queue if r in ALLOWED_STEMS],
         })
+
+
+@router.get("/api/fishanims/prompt")
+async def fishanims_get_prompt(request: Request) -> JSONResponse:
+    """Return the Veo prompt used for generation — the saved override if
+    one exists, plus the built-in default so the UI can offer a reset."""
+    import veo_gen  # noqa: WPS433
+    current = _get_veo_prompt()
+    return JSONResponse({
+        "prompt": current,
+        "default": veo_gen.VEO_PROMPT,
+        "is_default": current == veo_gen.VEO_PROMPT,
+    })
+
+
+@router.post("/api/fishanims/prompt")
+async def fishanims_set_prompt(request: Request) -> JSONResponse:
+    """Save the Veo prompt. The next fish generated (including fish still
+    queued in a running batch) uses it. A blank prompt clears the override
+    so the built-in default is used again."""
+    import veo_gen  # noqa: WPS433
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "expected a JSON body")
+    prompt = (body.get("prompt") or "").strip()
+    if len(prompt) > MAX_PROMPT_CHARS:
+        raise HTTPException(
+            413, f"prompt too long ({len(prompt)} > {MAX_PROMPT_CHARS} chars)")
+    col = fish_anims_settings_col()
+    if not prompt:
+        col.delete_one({"key": _VEO_PROMPT_KEY})
+        return JSONResponse({
+            "ok": True, "prompt": veo_gen.VEO_PROMPT, "is_default": True})
+    col.update_one(
+        {"key": _VEO_PROMPT_KEY},
+        {"$set": {
+            "key": _VEO_PROMPT_KEY,
+            "value": prompt,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+    return JSONResponse({
+        "ok": True, "prompt": prompt,
+        "is_default": prompt == veo_gen.VEO_PROMPT,
+    })
 
 
 @router.get("/api/fishanims/{name}/{idx}/download")

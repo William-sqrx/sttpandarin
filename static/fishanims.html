@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fish Animations Gallery — Chinesely</title>
-<link rel="stylesheet" href="/static/fishanims.css?v=15">
+<link rel="stylesheet" href="/static/fishanims.css?v=16">
 </head>
 <body>
 <header class="topbar">
@@ -34,6 +34,23 @@
     <code>python3 trigger_batch.py</code>. Click <strong>▶ reveal</strong>
     to animate a row; <strong>Download</strong> saves the sprite-sheet PNG.
   </p>
+
+  <details class="prompt-box" id="prompt-box">
+    <summary>Veo prompt <span id="prompt-badge" class="prompt-badge"></span></summary>
+    <p class="prompt-hint">
+      This exact text is sent to Veo for every fish. Edit it and click
+      <strong>Save</strong> — the next fish generated (including fish still
+      queued in a running batch) uses the new prompt. Save an empty box to
+      restore the built-in default.
+    </p>
+    <textarea id="prompt-text" class="prompt-text" rows="18" spellcheck="false"
+      placeholder="Loading…"></textarea>
+    <div class="prompt-actions">
+      <button id="prompt-save" type="button" class="ctrl-btn primary">Save prompt</button>
+      <button id="prompt-reset" type="button" class="sandbox-btn">Reset to default</button>
+      <span id="prompt-status" class="control-hint"></span>
+    </div>
+  </details>
 
   <section class="sandbox" aria-label="Sprite sheet sandbox">
     <header class="sandbox-head">
@@ -75,6 +92,6 @@
   </div>
 </main>
 
-<script src="/static/fishanims.js?v=15"></script>
+<script src="/static/fishanims.js?v=16"></script>
 </body>
 </html>

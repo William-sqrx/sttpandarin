@@ -76,6 +76,15 @@ def fish_anims_refs_col() -> Collection:
     return col
 
 
+def fish_anims_settings_col() -> Collection:
+    """Key/value settings for the fish-anims batch: { key, value, updated_at }.
+    Currently holds the user-editable Veo prompt (key 'veo_prompt'). Mongo
+    storage keeps edits across Render dyno restarts."""
+    col = _client()[DB_NAME]["fish_anims_settings"]
+    col.create_index("key", unique=True, name="key_unique")
+    return col
+
+
 def _norm(s: str) -> str:
     return (s or "").strip()
 

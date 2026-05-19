@@ -606,3 +606,56 @@ main {
   .cell { padding: 5px; gap: 5px; }
   .cell .dl-btn { padding: 4px 0; font-size: 11px; }
 }
+
+/* ----- Veo prompt editor -------------------------------------------------- */
+.prompt-box {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 18px;
+  margin-bottom: 22px;
+}
+.prompt-box > summary {
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  list-style: none;
+}
+.prompt-box > summary::-webkit-details-marker { display: none; }
+.prompt-box > summary::before {
+  content: "▸ ";
+  color: var(--ink-2);
+}
+.prompt-box[open] > summary::before { content: "▾ "; }
+.prompt-badge {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-2);
+  margin-left: 4px;
+}
+.prompt-badge.custom { color: #6dffb3; }
+.prompt-hint {
+  color: var(--ink-2);
+  font-size: 12px;
+  margin: 12px 0;
+}
+.prompt-text {
+  width: 100%;
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+}
+.prompt-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}

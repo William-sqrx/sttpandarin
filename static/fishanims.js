@@ -917,4 +917,71 @@ async function tick() {
   setTimeout(tick, fast ? POLL_MS : POLL_MS * 4);
 }
 
+// ----- Veo prompt editor ----------------------------------------------------
+// Loads the current prompt once, lets the user edit + save it. Saved text is
+// what gets sent to Veo for every fish (see /api/fishanims/prompt).
+(function setupPromptEditor() {
+  const textEl   = document.getElementById('prompt-text');
+  const saveBtn  = document.getElementById('prompt-save');
+  const resetBtn = document.getElementById('prompt-reset');
+  const statusEl = document.getElementById('prompt-status');
+  const badgeEl  = document.getElementById('prompt-badge');
+  if (!textEl || !saveBtn || !resetBtn) return;
+
+  function setBadge(isDefault) {
+    badgeEl.textContent = isDefault ? '(default)' : '(custom)';
+    badgeEl.classList.toggle('custom', !isDefault);
+  }
+
+  function flash(msg, isErr) {
+    statusEl.textContent = msg;
+    statusEl.style.color = isErr ? 'var(--err, #ff8aa8)' : '';
+    if (msg) setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  }
+
+  // Load the current prompt once on startup.
+  fetch('/api/fishanims/prompt', { credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(d => {
+      textEl.value = d.prompt || '';
+      setBadge(!!d.is_default);
+    })
+    .catch(e => flash('Failed to load prompt: ' + e.message, true));
+
+  async function savePrompt(text) {
+    saveBtn.disabled = true;
+    resetBtn.disabled = true;
+    statusEl.style.color = '';
+    statusEl.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/fishanims/prompt', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: text }),
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e.detail || r.status);
+      }
+      const d = await r.json();
+      textEl.value = d.prompt || '';
+      setBadge(!!d.is_default);
+      flash(d.is_default ? 'Reset to default.' : 'Saved.');
+    } catch (e) {
+      flash('Save failed: ' + e.message, true);
+    } finally {
+      saveBtn.disabled = false;
+      resetBtn.disabled = false;
+    }
+  }
+
+  saveBtn.addEventListener('click', () => savePrompt(textEl.value));
+  resetBtn.addEventListener('click', () => {
+    if (confirm('Reset the Veo prompt to the built-in default?')) {
+      savePrompt('');  // empty body clears the override server-side
+    }
+  });
+})();
+
 tick();
