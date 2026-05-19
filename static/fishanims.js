@@ -526,24 +526,16 @@ async function regenFish(name, button) {
   button.disabled = true;
   button.textContent = '…';
   try {
-    // If the batch isn't running, kick it off so the worker drains the regen
-    // queue. Start must happen FIRST — the start handler clears _regen_queue,
-    // so we enqueue after.
-    if (!batchRunning) {
-      const sr = await fetch('/api/fishanims/batch/start', {
-        method: 'POST',
-        credentials: 'same-origin',
-      });
-      if (!sr.ok) {
-        const text = await sr.text();
-        throw new Error(`start failed: ${sr.status} ${text.slice(0, 120)}`);
-      }
-    }
+    // The regen endpoint starts a regen-ONLY worker if nothing is running —
+    // it regenerates just this fish, never the whole batch.
     const r = await fetch(`/api/fishanims/batch/regen/${encodeURIComponent(name)}`, {
       method: 'POST',
       credentials: 'same-origin',
     });
-    if (!r.ok) throw new Error(`${r.status}`);
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.detail || r.status);
+    }
     regenQueue.add(name);
     button.textContent = 'queued';
     button.classList.add('queued');

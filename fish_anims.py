@@ -417,7 +417,10 @@ def _drain_regen_queue(col, pngs) -> None:
         _generate_and_save_fish(col, stem, ref_bytes, label=" regen")
 
 
-def _batch_loop() -> None:
+def _batch_loop(regen_only: bool = False) -> None:
+    """Background worker. A full run (regen_only=False) sweeps every fish;
+    a regen-only run skips the sweep and processes just the regen queue —
+    so clicking Regen on one fish never kicks off generation for the rest."""
     keepalive_stop = threading.Event()
     keepalive_thread = threading.Thread(
         target=_keepalive_loop, args=(keepalive_stop,), daemon=True)
@@ -437,14 +440,21 @@ def _batch_loop() -> None:
                       if any(c.isalpha() for c in p.stem)
                       and p.stem in ALLOWED_STEMS)
         with _lock:
-            _status.total = len(pngs) * PER_FISH
+            # A regen-only run starts at 0 — _drain_regen_queue bumps the
+            # total per queued fish.
+            _status.total = 0 if regen_only else len(pngs) * PER_FISH
 
         keepalive_thread.start()
         consecutive_fails = 0
-        _log_event(f"batch started — {len(pngs)} fish, "
-                   f"{PER_FISH} sheets each")
+        if regen_only:
+            _log_event("regen run started")
+        else:
+            _log_event(f"batch started — {len(pngs)} fish, "
+                       f"{PER_FISH} sheets each")
 
-        for png in pngs:
+        # regen-only: iterate nothing, fall straight through to the regen
+        # drain below. A full run sweeps every fish.
+        for png in ([] if regen_only else pngs):
             if _stop_flag.is_set():
                 break
             stem = png.stem
@@ -498,15 +508,16 @@ def _batch_loop() -> None:
             # Veo was running so regen takes effect promptly.
             _drain_regen_queue(col, pngs)
 
-        # End-of-batch sweep — picks up regen requests issued for fish the
-        # main loop has already finished with.
+        # Drain the regen queue — the only work in a regen-only run, and a
+        # final sweep otherwise (picks up regens queued for already-done fish).
         _drain_regen_queue(col, pngs)
 
+        mode = "regen run" if regen_only else "batch"
         with _lock:
             _status.state = "stopped" if _stop_flag.is_set() else "finished"
             _status.finished_at = time.time()
             _status.current = ""
-        _log_event(f"batch {_status.state} — "
+        _log_event(f"{mode} {_status.state} — "
                    f"done {_status.done} · skip {_status.skipped} · "
                    f"fail {_status.failed}")
     except Exception as e:  # noqa: BLE001
@@ -514,9 +525,36 @@ def _batch_loop() -> None:
             _status.state = "error"
             _status.error = repr(e)
             _status.finished_at = time.time()
-        _log_event(f"batch ERROR — {e!r}")
+        _log_event(f"{'regen run' if regen_only else 'batch'} ERROR — {e!r}")
     finally:
         keepalive_stop.set()
+
+
+def _launch_worker(regen_only: bool) -> None:
+    """Reset status and start the background worker thread. A full run
+    (regen_only=False) clears the regen queue first; a regen-only run keeps
+    it intact (the caller has just queued a fish). Caller must have already
+    verified nothing is running."""
+    global _thread
+    with _lock:
+        _status.state = "running"
+        _status.total = 0
+        _status.done = 0
+        _status.skipped = 0
+        _status.failed = 0
+        _status.current = ""
+        _status.error = None
+        _status.last_error = None
+        _status.started_at = time.time()
+        _status.finished_at = None
+        if not regen_only:
+            _regen_queue.clear()
+        _log.clear()
+    _stop_flag.clear()
+    _ensure_skip_set_loaded()
+    _thread = threading.Thread(
+        target=_batch_loop, kwargs={"regen_only": regen_only}, daemon=True)
+    _thread.start()
 
 
 router = APIRouter()
@@ -607,6 +645,13 @@ async def fishanims_sheet(name: str, idx: str, request: Request) -> Response:
                     headers={"Cache-Control": "no-store"})
 
 
+def _worker_running() -> bool:
+    """True if the background worker thread is alive and marked running."""
+    with _lock:
+        return (_status.state == "running"
+                and _thread is not None and _thread.is_alive())
+
+
 @router.post("/api/fishanims/batch/start")
 async def fishanims_batch_start(request: Request) -> JSONResponse:
     import veo_gen  # noqa: WPS433
@@ -615,30 +660,11 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
         raise HTTPException(503, f"Veo not configured on server: {why}")
     if not INPUT_DIR.is_dir():
         raise HTTPException(503, f"input folder missing on server: {INPUT_DIR.name}")
-    global _thread
-    with _lock:
-        if _status.state == "running" and _thread is not None and _thread.is_alive():
-            raise HTTPException(409, "batch already running")
-        _status.state = "running"
-        _status.total = 0
-        _status.done = 0
-        _status.skipped = 0
-        _status.failed = 0
-        _status.current = ""
-        _status.error = None
-        _status.last_error = None
-        _status.started_at = time.time()
-        _status.finished_at = None
-    _stop_flag.clear()
-    # Persistent skips survive Start cycles — once a fish is skipped, it
-    # stays skipped until you explicitly unskip it. Only the transient regen
-    # queue is reset here.
-    _ensure_skip_set_loaded()
-    with _lock:
-        _regen_queue.clear()
-        _log.clear()
-    _thread = threading.Thread(target=_batch_loop, daemon=True)
-    _thread.start()
+    if _worker_running():
+        raise HTTPException(409, "batch already running")
+    # Persistent skips survive Start cycles; only the transient regen queue
+    # is reset (handled inside _launch_worker for a full run).
+    _launch_worker(regen_only=False)
     return JSONResponse({"ok": True, "state": "running"})
 
 
@@ -680,14 +706,22 @@ async def fishanims_batch_unskip(name: str, request: Request) -> JSONResponse:
 
 @router.post("/api/fishanims/batch/regen/{name}")
 async def fishanims_batch_regen(name: str, request: Request) -> JSONResponse:
-    """Queue a fish for full regeneration: once the in-flight fish finishes,
-    the worker re-runs Veo for this fish (wiping its existing clips and
-    saving fresh ones). _status.total is bumped so the progress bar accounts
-    for the extra work. Idempotent — re-queuing an already-pending fish is a no-op."""
+    """Queue a fish for full regeneration (wipe its clips, re-run Veo).
+
+    If a run is already in progress the fish just joins its regen queue.
+    Otherwise a regen-ONLY worker is started that processes just the queued
+    fish — it does NOT sweep every fish like a full batch. So clicking Regen
+    on one fish only regenerates that fish."""
     name = _safe_name(name)
+    import veo_gen  # noqa: WPS433
+    ok, why = veo_gen.veo_configured()
+    if not ok:
+        raise HTTPException(503, f"Veo not configured on server: {why}")
     with _lock:
         if name not in _regen_queue:
             _regen_queue.append(name)
+    if not _worker_running():
+        _launch_worker(regen_only=True)
     return JSONResponse({"ok": True, "queued": name})
 
 
