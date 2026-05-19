@@ -29,6 +29,7 @@ SHEET_FRAMES = 24            # 5x5 grid with the bottom-right cell left empty
 CROP_BLACK_THRESHOLD = 24    # max(R,G,B) <= this counts as black background
 CROP_PADDING = 8             # safety margin so dark fish outlines aren't clipped
 MAX_CELL_PX = 256            # downscale cropped frames so cells stay reasonable
+LOOP_SEARCH_FRAC = 0.6       # only look for the loop-end frame past this point
 
 VEO_PROMPT = """Animate this fish with very subtle smooth swimming motion only.
 
@@ -166,9 +167,14 @@ def video_to_sprite_sheet(mp4_bytes: bytes):
     """Turn one MP4 clip into a SHEET_COLS x SHEET_ROWS sprite sheet.
 
     Every frame is cropped to the fish's bounding box — the UNION of the
-    non-black region across ALL frames, so the body is never clipped in any
-    frame. SHEET_FRAMES frames are sampled evenly and packed row-major into
-    the grid; the final (bottom-right) cell is left empty.
+    non-black region across ALL frames, so the body is never clipped.
+
+    For a stutter-free loop the clip is cut at its natural loop point: the
+    frame in the back portion of the clip that looks most like frame 0 is
+    found, and only [0 .. loop_end] is sampled. SHEET_FRAMES-1 unique
+    frames are taken evenly across that span, and the final cell is set
+    equal to the first — so the sprite sheet's last frame == first frame
+    and playback wraps cleanly.
 
     Decoding is two-pass and streamed (one frame in memory at a time) to
     stay well under the dyno's RAM ceiling.
@@ -183,14 +189,21 @@ def video_to_sprite_sheet(mp4_bytes: bytes):
     import numpy as np
     from PIL import Image
 
+    # SHEET_FRAMES cells total; the last one repeats the first, so only
+    # this many unique frames are sampled from the clip.
+    unique = SHEET_FRAMES - 1
+
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tf:
         tf.write(mp4_bytes)
         tmp = tf.name
     try:
-        # Pass 1 — count frames and OR together a non-black mask.
+        # Pass 1 — non-black mask + frame count + per-frame similarity to
+        # frame 0 (a small grayscale thumbnail diff) for loop detection.
         union = None
         height = width = 0
         total = 0
+        ref_small = None
+        diffs: list[float] = []
         reader = imageio.get_reader(tmp, format="ffmpeg")
         try:
             for frame in reader:
@@ -199,6 +212,12 @@ def video_to_sprite_sheet(mp4_bytes: bytes):
                     height, width = arr.shape[0], arr.shape[1]
                     union = np.zeros((height, width), dtype=bool)
                 union |= arr.max(axis=2) > CROP_BLACK_THRESHOLD
+                small = np.asarray(
+                    Image.fromarray(arr).convert("L").resize((48, 48)),
+                ).astype(np.int16)
+                if ref_small is None:
+                    ref_small = small
+                diffs.append(float(np.abs(small - ref_small).mean()))
                 total += 1
         finally:
             reader.close()
@@ -214,11 +233,22 @@ def video_to_sprite_sheet(mp4_bytes: bytes):
         x1 = min(width, int(xs.max()) + 1 + CROP_PADDING)
         y1 = min(height, int(ys.max()) + 1 + CROP_PADDING)
 
-        # Even sample across the clip. i*total/N (rather than i*(total-1)/(N-1))
-        # skips the duplicated final loop frame for a clean SHEET_FRAMES loop.
+        # Loop-point detection — the frame in the back LOOP_SEARCH_FRAC of
+        # the clip closest to frame 0. Cutting the clip there means the
+        # fish has genuinely returned to its start pose, so wrapping the
+        # sprite sheet doesn't jump.
+        search_start = max(1, int(total * LOOP_SEARCH_FRAC))
+        if search_start >= total:
+            loop_end = total - 1
+        else:
+            loop_end = search_start + int(np.argmin(diffs[search_start:]))
+        loop_end = max(unique, loop_end)  # need at least `unique` frames
+
+        # Sample `unique` frames evenly across [0, loop_end]; the last cell
+        # is filled with a copy of frame 0 afterwards.
         want: dict[int, list[int]] = {}
-        for pos in range(SHEET_FRAMES):
-            fidx = min(total - 1, round(pos * total / SHEET_FRAMES))
+        for pos in range(unique):
+            fidx = min(loop_end, round(pos * loop_end / unique))
             want.setdefault(fidx, []).append(pos)
 
         # Pass 2 — keep only the sampled frames, already cropped.
@@ -238,8 +268,12 @@ def video_to_sprite_sheet(mp4_bytes: bytes):
         except OSError:
             pass
 
-    if any(s is None for s in sampled):
+    if any(sampled[p] is None for p in range(unique)):
         raise RuntimeError("failed to sample every frame from the clip")
+
+    # Closing frame == opening frame — the sprite sheet's last frame is the
+    # first, so the loop has no seam.
+    sampled[SHEET_FRAMES - 1] = sampled[0]
 
     crop_h, crop_w = y1 - y0, x1 - x0
     scale = min(1.0, MAX_CELL_PX / max(crop_w, crop_h))
