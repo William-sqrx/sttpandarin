@@ -1,6 +1,9 @@
 """Fish animations gallery. Generation runs in a background thread on
-the prod server (kicked off by trigger_batch.py). Sheets are stored in
-MongoDB so they survive Render redeploys + dyno restarts.
+the prod server (kicked off by trigger_batch.py). Each fish reference
+image is animated into looping MP4 clips via Veo 3.1, then each clip is
+cropped and packed into a 5x5 / 24-frame sprite sheet (see veo_gen.py).
+The sprite sheets are stored in MongoDB so they survive Render redeploys
++ dyno restarts.
 
 A keepalive pinger fires the public URL every minute while the batch
 runs, so the free-tier dyno doesn't spin down mid-job.
@@ -27,10 +30,11 @@ from db import fish_anims_col, fish_anims_refs_col, fish_anims_skips_col
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 INPUT_DIR = APP_DIR / "Chinesely Fish (256)"
-PER_FISH = 5
+PER_FISH = 4  # Veo emits this many clip variants per call (one call per fish)
 KEEPALIVE_SECS = 60
-MAX_CONSECUTIVE_FAILS = 8  # auto-stop after this many back-to-back failures
+MAX_CONSECUTIVE_FAILS = 3  # auto-stop after this many back-to-back fish failures
 MAX_REF_BYTES = 8 * 1024 * 1024  # 8 MB ceiling on uploaded reference images
+MAX_SHEET_BYTES = 15 * 1024 * 1024  # stay under MongoDB's 16 MB document limit
 ALLOWED_REF_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
@@ -106,7 +110,7 @@ _thread: threading.Thread | None = None
 _migrated_once = False
 _skip_fish: set[str] = set()
 _skip_set_loaded = False  # in-memory cache of persistent skips loaded yet?
-_regen_queue: list[str] = []  # FIFO of fish to fully regenerate (5 fresh sheets)
+_regen_queue: list[str] = []  # FIFO of fish to fully regenerate (fresh clips)
 
 
 def _ensure_skip_set_loaded() -> None:
@@ -206,41 +210,28 @@ def _migrate_disk_to_mongo(col) -> int:
     return n
 
 
-def _generate_and_save_one(col, stem: str, idx: int, ref_bytes: bytes,
-                           label: str = "") -> bool:
-    """Generate one sprite sheet via PixelLab and persist to MongoDB.
-    Updates _status.done/_status.failed counters. Returns True on success.
-    Caller is responsible for skip-existing logic."""
-    from app import _generate_one  # noqa: WPS433
+def _flatten_to_black(data: bytes) -> bytes:
+    """Composite a (possibly transparent) image onto a solid black
+    background, returning PNG bytes. Fish references ship as transparent
+    PNGs; both the web preview and the Veo input use the black-backed
+    version so generated clips have a clean, easily-cropped background."""
+    try:
+        import io  # noqa: WPS433
+        from PIL import Image  # noqa: WPS433
+        img = Image.open(io.BytesIO(data)).convert("RGBA")
+        bg = Image.new("RGB", img.size, (0, 0, 0))
+        bg.paste(img, mask=img.split()[-1])
+        out = io.BytesIO()
+        bg.save(out, format="PNG")
+        return out.getvalue()
+    except Exception as e:  # noqa: BLE001
+        print(f"[fishanims] flatten-to-black failed: {e}", flush=True)
+        return data
 
-    sheet_bytes = frames = frame_w = None
-    last_err: Exception | None = None
-    for attempt in (1, 2):
-        try:
-            sheet_bytes, frames, frame_w = _generate_one(ref_bytes)
-            break
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            print(f"[fishanims] try {attempt} {stem}/{idx}{label}: {e}",
-                  flush=True)
-            if attempt < 2:
-                time.sleep(5)
-    if sheet_bytes is None:
-        with _lock:
-            _status.failed += 1
-            _status.last_error = f"{stem}/{idx}{label}: {last_err}"
-        print(f"[fishanims] FAIL {stem}/{idx}{label}: {last_err}", flush=True)
-        return False
 
-    doc = {
-        "name": stem,
-        "idx": idx,
-        "sheet": Binary(sheet_bytes),
-        "frames": frames,
-        "frameW": frame_w,
-        "frameH": frame_w,
-        "created_at": datetime.now(timezone.utc),
-    }
+def _save_sheet_doc(col, stem: str, idx: int, doc: dict, label: str) -> bool:
+    """Persist one sprite-sheet doc to MongoDB with retry/backoff. Returns
+    True on a confirmed write."""
     for db_attempt in range(1, 7):  # ~5s, 10s, 20s, 40s, 60s, 60s
         try:
             col.update_one(
@@ -250,29 +241,99 @@ def _generate_and_save_one(col, stem: str, idx: int, ref_bytes: bytes,
             )
             if not col.find_one({"name": stem, "idx": idx}, {"_id": 1}):
                 raise RuntimeError("upsert returned ok but doc not found")
-            with _lock:
-                _status.done += 1
-            print(f"[fishanims] ok {stem}/{idx}{label} ({frames}f, "
-                  f"{len(sheet_bytes)//1024}KB → mongo)", flush=True)
+            print(f"[fishanims] ok {stem}/{idx}{label} "
+                  f"({len(doc['sheet'])//1024}KB sheet → mongo)", flush=True)
             return True
         except Exception as e:  # noqa: BLE001
             print(f"[fishanims] mongo write {db_attempt} {stem}/{idx}{label}: {e}",
                   flush=True)
             if db_attempt < 6:
-                backoff = min(60, 5 * (2 ** (db_attempt - 1)))
-                time.sleep(backoff)
-    with _lock:
-        _status.failed += 1
-        _status.last_error = f"{stem}/{idx}{label}: mongo write failed (sheet lost)"
+                time.sleep(min(60, 5 * (2 ** (db_attempt - 1))))
     print(f"[fishanims] PERMANENT MONGO WRITE FAIL {stem}/{idx}{label} "
           f"(sheet bytes lost — re-trigger to regenerate)", flush=True)
     return False
 
 
+def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
+                            label: str = "") -> bool:
+    """Animate one fish with Veo, then turn each clip into a 5x5 sprite
+    sheet (see veo_gen.video_to_sprite_sheet) and persist it as its own
+    (name, idx) doc. Any prior docs for the fish are wiped first so a
+    re-run replaces rather than appends. Updates _status counters. Returns
+    True if at least one sheet was saved."""
+    import veo_gen  # noqa: WPS433
+
+    # The reference is transparent; Veo needs an opaque image and the
+    # crop step needs a clean background — composite onto black first.
+    ref_black = _flatten_to_black(ref_bytes)
+
+    videos: list[bytes] | None = None
+    last_err: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            videos = veo_gen.generate_videos(ref_black)
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            print(f"[fishanims] veo try {attempt} {stem}{label}: {e}", flush=True)
+            if attempt < 2:
+                time.sleep(10)
+    if not videos:
+        with _lock:
+            _status.failed += PER_FISH
+            _status.last_error = f"{stem}{label}: {last_err}"
+        print(f"[fishanims] FAIL {stem}{label}: {last_err}", flush=True)
+        return False
+
+    # Replace — drop any prior docs so idx numbering stays clean (1..N).
+    deleted = col.delete_many({"name": stem}).deleted_count
+    if deleted:
+        print(f"[fishanims] {stem}{label}: wiped {deleted} prior doc(s)",
+              flush=True)
+
+    saved = 0
+    for idx, mp4 in enumerate(videos[:PER_FISH], start=1):
+        try:
+            sheet_png, cols, rows, frames, fw, fh = \
+                veo_gen.video_to_sprite_sheet(mp4)
+        except Exception as e:  # noqa: BLE001
+            print(f"[fishanims] sheet build FAIL {stem}/{idx}{label}: {e}",
+                  flush=True)
+            with _lock:
+                _status.last_error = f"{stem}/{idx}{label}: sheet build — {e}"
+            continue
+        if len(sheet_png) > MAX_SHEET_BYTES:
+            print(f"[fishanims] skip {stem}/{idx}{label}: sheet too big "
+                  f"({len(sheet_png)//1024}KB > {MAX_SHEET_BYTES//1024}KB)",
+                  flush=True)
+            continue
+        doc = {
+            "name": stem,
+            "idx": idx,
+            "sheet": Binary(sheet_png),
+            "cols": cols,
+            "rows": rows,
+            "frames": frames,
+            "frameW": fw,
+            "frameH": fh,
+            "created_at": datetime.now(timezone.utc),
+        }
+        if _save_sheet_doc(col, stem, idx, doc, label):
+            saved += 1
+
+    with _lock:
+        _status.done += saved
+        if saved < PER_FISH:
+            _status.failed += (PER_FISH - saved)
+            if saved == 0:
+                _status.last_error = f"{stem}{label}: no clips saved"
+    return saved > 0
+
+
 def _drain_regen_queue(col, pngs) -> None:
-    """Process every pending regen request: wipe the fish's existing sheets
-    and regenerate all 5. Bumps _status.total so the progress bar accounts
-    for the extra work. Honors stop flag between sheets."""
+    """Process every pending regen request: re-run Veo for the fish (which
+    wipes its existing clips and saves fresh ones). Bumps _status.total so
+    the progress bar accounts for the extra work. Honors the stop flag."""
     while True:
         with _lock:
             if not _regen_queue or _stop_flag.is_set():
@@ -281,11 +342,9 @@ def _drain_regen_queue(col, pngs) -> None:
         # `png` may be None for a fish that only has an uploaded custom
         # ref (no disk default) — that's fine, _get_ref_bytes handles it.
         png = next((p for p in pngs if p.stem == stem), None)
-        deleted = col.delete_many({"name": stem}).deleted_count
-        print(f"[fishanims] regen: wiping {stem} ({deleted} existing) → 5 fresh",
-              flush=True)
         with _lock:
             _status.total += PER_FISH
+            _status.current = f"{stem} (veo regen)"
         try:
             ref_bytes = _get_ref_bytes(stem, png)
         except FileNotFoundError as e:
@@ -294,12 +353,7 @@ def _drain_regen_queue(col, pngs) -> None:
                 _status.last_error = str(e)
             print(f"[fishanims] regen FAIL {stem}: {e}", flush=True)
             continue
-        for idx in range(1, PER_FISH + 1):
-            if _stop_flag.is_set():
-                return
-            with _lock:
-                _status.current = f"{stem} {idx}/{PER_FISH} (regen)"
-            _generate_and_save_one(col, stem, idx, ref_bytes, label=" regen")
+        _generate_and_save_fish(col, stem, ref_bytes, label=" regen")
 
 
 def _batch_loop() -> None:
@@ -307,7 +361,6 @@ def _batch_loop() -> None:
     keepalive_thread = threading.Thread(
         target=_keepalive_loop, args=(keepalive_stop,), daemon=True)
     try:
-        from app import _generate_one  # noqa: WPS433,F401
         col = fish_anims_col()
         _ensure_migrated()
         _ensure_skip_set_loaded()
@@ -332,6 +385,22 @@ def _batch_loop() -> None:
             if _stop_flag.is_set():
                 break
             stem = png.stem
+            with _lock:
+                skip = stem in _skip_fish
+                _status.current = f"{stem} (veo)"
+            if skip:
+                with _lock:
+                    _status.skipped += PER_FISH
+                continue
+
+            # Fish already fully generated — leave it untouched on resume.
+            if col.count_documents(
+                {"name": stem, "cols": {"$exists": True}}
+            ) >= PER_FISH:
+                with _lock:
+                    _status.skipped += PER_FISH
+                continue
+
             try:
                 ref_bytes = _get_ref_bytes(stem, png)
             except FileNotFoundError as e:
@@ -340,44 +409,26 @@ def _batch_loop() -> None:
                     _status.last_error = str(e)
                 print(f"[fishanims] FAIL {stem}: {e}", flush=True)
                 continue
-            for idx in range(1, PER_FISH + 1):
-                if _stop_flag.is_set():
-                    break
-                with _lock:
-                    if stem in _skip_fish:
-                        # Bump remaining slots into the skipped counter so
-                        # the progress bar reaches `total` even when fish
-                        # are short-circuited mid-row.
-                        _status.skipped += (PER_FISH - idx + 1)
-                        break
-                    _status.current = f"{stem} {idx}/{PER_FISH}"
 
-                if col.find_one({"name": stem, "idx": idx}, {"_id": 1}):
+            if _generate_and_save_fish(col, stem, ref_bytes):
+                consecutive_fails = 0
+            else:
+                consecutive_fails += 1
+                if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
                     with _lock:
-                        _status.skipped += 1
-                    continue
-
-                if _generate_and_save_one(col, stem, idx, ref_bytes):
-                    consecutive_fails = 0
-                else:
-                    consecutive_fails += 1
-                    if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
-                        with _lock:
-                            _status.state = "error"
-                            _status.error = (
-                                f"auto-stopped after {consecutive_fails} consecutive "
-                                f"PixelLab failures — check Render logs for the reason"
-                            )
-                            _status.finished_at = time.time()
-                            _status.current = ""
-                        print(f"[fishanims] auto-stop: {consecutive_fails} consecutive "
-                              f"fails — bailing out", flush=True)
-                        return
-                # After every sheet save, drain any regen requests that
-                # arrived during this sheet's generation. This makes regen
-                # take effect "as soon as the in-flight sheet finishes",
-                # rather than waiting until the entire batch is done.
-                _drain_regen_queue(col, pngs)
+                        _status.state = "error"
+                        _status.error = (
+                            f"auto-stopped after {consecutive_fails} consecutive "
+                            f"Veo failures — check Render logs for the reason"
+                        )
+                        _status.finished_at = time.time()
+                        _status.current = ""
+                    print(f"[fishanims] auto-stop: {consecutive_fails} consecutive "
+                          f"fails — bailing out", flush=True)
+                    return
+            # After each fish, drain any regen requests that arrived while
+            # Veo was running so regen takes effect promptly.
+            _drain_regen_queue(col, pngs)
 
         # End-of-batch sweep — picks up regen requests issued for fish the
         # main loop has already finished with.
@@ -414,22 +465,28 @@ async def fishanims_list(request: Request) -> JSONResponse:
     try:
         _ensure_migrated()
         col = fish_anims_col()
+        # Only current-format docs count (the `cols` field marks a 5x5
+        # Veo sprite sheet); legacy docs are ignored so they don't show
+        # as broken rows.
         cur = col.find(
-            {},
-            {"name": 1, "idx": 1, "frames": 1, "frameW": 1, "frameH": 1},
+            {"cols": {"$exists": True}},
+            {"name": 1, "idx": 1, "cols": 1, "rows": 1,
+             "frames": 1, "frameW": 1, "frameH": 1},
         ).sort([("name", 1), ("idx", 1)])
 
         rows_map: dict[str, list[dict]] = {}
         for d in cur:
             rows_map.setdefault(d["name"], []).append({
                 "idx": str(d["idx"]),
-                "frames": d.get("frames", 1),
+                "cols": d.get("cols", 5),
+                "rows": d.get("rows", 5),
+                "frames": d.get("frames", 24),
                 "frameW": d.get("frameW", 256),
                 "frameH": d.get("frameH", 256),
             })
 
         # Make sure every disk-side species has a row even when it has no
-        # generated sheets yet — otherwise the user can't see an Upload
+        # generated clips yet — otherwise the user can't see an Upload
         # button for fish that haven't been animated yet.
         for stem in _disk_stems():
             rows_map.setdefault(stem, [])
@@ -467,7 +524,7 @@ def _fetch_sheet(name: str, idx: str) -> bytes:
         {"name": name, "idx": int(idx)},
         {"sheet": 1},
     )
-    if not doc:
+    if not doc or not doc.get("sheet"):
         raise HTTPException(404, "not found")
     return bytes(doc["sheet"])
 
@@ -480,8 +537,10 @@ async def fishanims_sheet(name: str, idx: str, request: Request) -> Response:
 
 @router.post("/api/fishanims/batch/start")
 async def fishanims_batch_start(request: Request) -> JSONResponse:
-    if not os.getenv("PIXELLAB_SECRET"):
-        raise HTTPException(503, "PIXELLAB_SECRET not configured on server")
+    import veo_gen  # noqa: WPS433
+    ok, why = veo_gen.veo_configured()
+    if not ok:
+        raise HTTPException(503, f"Veo not configured on server: {why}")
     if not INPUT_DIR.is_dir():
         raise HTTPException(503, f"input folder missing on server: {INPUT_DIR.name}")
     global _thread
@@ -548,10 +607,10 @@ async def fishanims_batch_unskip(name: str, request: Request) -> JSONResponse:
 
 @router.post("/api/fishanims/batch/regen/{name}")
 async def fishanims_batch_regen(name: str, request: Request) -> JSONResponse:
-    """Queue a fish for full regeneration: after the in-flight sheet finishes,
-    the worker wipes all 5 sheets for this fish from MongoDB and generates
-    5 fresh ones. _status.total is bumped so the progress bar accounts for
-    the extra work. Idempotent — re-queuing an already-pending fish is a no-op."""
+    """Queue a fish for full regeneration: once the in-flight fish finishes,
+    the worker re-runs Veo for this fish (wiping its existing clips and
+    saving fresh ones). _status.total is bumped so the progress bar accounts
+    for the extra work. Idempotent — re-queuing an already-pending fish is a no-op."""
     name = _safe_name(name)
     with _lock:
         if name not in _regen_queue:
@@ -595,32 +654,34 @@ async def fishanims_download(name: str, idx: str, request: Request) -> Response:
 
 
 # ----- Per-fish reference image upload --------------------------------------
-# The batch worker reads the reference image when generating each sprite
-# sheet. By default that's the on-disk PNG in 'Chinesely Fish (256)/', but
+# The batch worker reads the reference image when animating each fish with
+# Veo. By default that's the on-disk PNG in 'Chinesely Fish (256)/', but
 # users can upload a replacement here that gets persisted to MongoDB and
 # preferred by `_get_ref_bytes`. Re-running Regen for the fish then
-# produces 5 fresh sheets driven by the uploaded image.
+# produces fresh clips driven by the uploaded image.
 
 @router.get("/api/fishanims/{name}/ref")
 async def fishanims_get_ref(name: str, request: Request) -> Response:
-    """Serve the current reference image — uploaded if present, otherwise
-    the on-disk default. Returns 404 only when neither source has bytes
-    (e.g. an unknown species name)."""
+    """Serve the current reference image composited onto a solid black
+    background — uploaded ref if present, otherwise the on-disk default.
+    The black backing matches what Veo is fed, so the web preview shows
+    exactly the image the clips are generated from. Returns 404 only when
+    neither source has bytes (e.g. an unknown species name)."""
     name = _safe_name(name)
     doc = fish_anims_refs_col().find_one(
         {"name": name},
-        {"ref": 1, "content_type": 1},
+        {"ref": 1},
     )
     if doc and doc.get("ref"):
         return Response(
-            content=bytes(doc["ref"]),
-            media_type=doc.get("content_type") or "image/png",
+            content=_flatten_to_black(bytes(doc["ref"])),
+            media_type="image/png",
             headers={"Cache-Control": "no-store"},
         )
     disk = INPUT_DIR / f"{name}.png"
     if disk.exists():
         return Response(
-            content=disk.read_bytes(),
+            content=_flatten_to_black(disk.read_bytes()),
             media_type="image/png",
             headers={"Cache-Control": "no-store"},
         )

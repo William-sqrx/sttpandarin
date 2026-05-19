@@ -45,10 +45,10 @@ def words_col() -> Collection:
 
 
 def fish_anims_col() -> Collection:
-    """Sprite-sheet docs: { name, idx, sheet (Binary PNG), frames, frameW,
-    frameH, created_at }. Compound unique index (name, idx) lets us upsert
-    by species + sheet number — re-running the batch is safely idempotent.
-    """
+    """Sprite-sheet docs: { name, idx, sheet (Binary PNG), cols, rows,
+    frames, frameW, frameH, created_at }. Compound unique index (name, idx)
+    lets us upsert by species + clip number — re-running the batch is
+    safely idempotent."""
     col = _client()[DB_NAME]["fish_anims"]
     # ensure_index is a no-op after the first call.
     col.create_index([("name", 1), ("idx", 1)], unique=True, name="name_idx_unique")

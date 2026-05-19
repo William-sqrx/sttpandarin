@@ -1,9 +1,10 @@
-// Fish animations gallery: rows = fish, 5 columns of animated sheets.
+// Fish animations gallery: rows = fish, 4 columns of 5x5 sprite sheets.
 // Polls /api/fishanims/list + /api/fishanims/batch/status every 5s while
 // the batch is running, so progress is live and the prod dyno stays warm.
 
-const FRAME_MS = 100;
 const POLL_MS = 5000;
+const PER_FISH = 4;     // sprite-sheet variants per fish (one per Veo clip)
+const FRAME_MS = 100;   // gallery sprite-sheet playback pacing (~10fps)
 
 // ----- Sandbox: upload-and-animate any sprite sheet -------------------------
 // Self-contained. Supports both a horizontal strip (cols×1) and a full grid
@@ -289,7 +290,7 @@ let batchRunning = false;
 const rowEls = new Map();  // species name → row DOM element (so we can update
                             // .generating class without re-rendering the grid)
 let lastCurrentStem = null;
-const revealedRows = new Set();  // names whose canvases are currently animating
+const revealedRows = new Set();  // names whose sprite sheets are currently animating
 
 async function fetchJSON(url) {
   const r = await fetch(url, { credentials: 'same-origin' });
@@ -354,9 +355,12 @@ function makeCell(name, sheet) {
   const cell = document.createElement('div');
   cell.className = 'cell';
 
+  // Canvas buffer == one grid cell so drawImage scales 1:1; CSS aspect-ratio
+  // follows the cell so non-square frames aren't squished.
   const canvas = document.createElement('canvas');
   canvas.width = sheet.frameW;
   canvas.height = sheet.frameH;
+  canvas.style.aspectRatio = `${sheet.frameW} / ${sheet.frameH}`;
   cell.appendChild(canvas);
 
   const actions = document.createElement('div');
@@ -373,44 +377,33 @@ function makeCell(name, sheet) {
   actions.appendChild(dl);
   cell.appendChild(actions);
 
-  // Lazy-load: don't fetch the sprite sheet on row creation. With many
-  // rows the parallel image fetches choked the page. Instead the URL
-  // is stashed on the canvas and the actual <Image> is only created
-  // when the row's Reveal button is pressed (loadSheet below). Hidden
-  // rows render a flat placeholder so the layout still reserves space.
+  // Lazy-load: don't fetch the sprite-sheet PNG on row creation — with many
+  // rows the parallel fetches choke the page. The URL is stashed and the
+  // <Image> is only created when the row is revealed (loadSheet). Hidden
+  // cells show a flat black placeholder so the layout reserves space.
   canvas._sheet = sheet;
   canvas._url = `/api/fishanims/${encodeURIComponent(name)}/${sheet.idx}/sheet`;
   canvas._name = name;
   drawPlaceholder(canvas);
-  // If a previous reveal toggle for this fish persists across re-renders,
-  // honour it on remount.
-  if (revealedRows.has(name)) {
-    loadSheet(canvas);
-  }
+  if (revealedRows.has(name)) loadSheet(canvas);
 
   return cell;
 }
 
-// Flat dark placeholder — drawn for every cell on creation and after a
-// hide so the canvas isn't blank-white in the gallery grid.
+// Flat black placeholder — drawn on creation and after a hide so the canvas
+// isn't blank-white in the grid.
 function drawPlaceholder(canvas) {
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
-// Lazy-load the sprite sheet for a single canvas. Caches the loaded
-// Image on the canvas so repeated reveal toggles after the first don't
-// re-fetch. Once loaded, picks up whatever the row's reveal state is
-// at that moment.
+// Lazy-load the sprite-sheet image for one canvas, caching it so repeat
+// reveal toggles don't re-fetch. Reacts to the row's current reveal state.
 function loadSheet(canvas) {
   if (canvas._img) {
-    // Already loaded — just react to current reveal state.
-    if (revealedRows.has(canvas._name)) {
-      startAnimate(canvas, canvas._img, canvas._sheet);
-    } else {
-      drawFrame0(canvas, canvas._img, canvas._sheet);
-    }
+    if (revealedRows.has(canvas._name)) startAnimate(canvas, canvas._img, canvas._sheet);
+    else drawFrame(canvas, canvas._img, canvas._sheet, 0);
     return;
   }
   if (canvas._loading) return;
@@ -420,11 +413,8 @@ function loadSheet(canvas) {
   img.onload = () => {
     canvas._img = img;
     canvas._loading = false;
-    if (revealedRows.has(canvas._name)) {
-      startAnimate(canvas, img, canvas._sheet);
-    } else {
-      drawFrame0(canvas, img, canvas._sheet);
-    }
+    if (revealedRows.has(canvas._name)) startAnimate(canvas, img, canvas._sheet);
+    else drawFrame(canvas, img, canvas._sheet, 0);
   };
   img.onerror = () => {
     canvas._loading = false;
@@ -434,14 +424,18 @@ function loadSheet(canvas) {
   };
 }
 
-function drawFrame0(canvas, img, sheet) {
+// Draw frame `f` of the 5x5 sprite sheet — frames run row-major, so
+// col = f % cols, row = f / cols.
+function drawFrame(canvas, img, sheet, f) {
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
+  const col = f % sheet.cols;
+  const row = Math.floor(f / sheet.cols);
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(
     img,
-    0, 0, sheet.frameW, sheet.frameH,
+    col * sheet.frameW, row * sheet.frameH, sheet.frameW, sheet.frameH,
     0, 0, canvas.width, canvas.height,
   );
 }
@@ -449,24 +443,14 @@ function drawFrame0(canvas, img, sheet) {
 function startAnimate(canvas, img, sheet) {
   if (canvas._animating) return;
   canvas._animating = true;
-  const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingEnabled = false;
   const total = sheet.frames || 1;
-  let i = 0;
+  let f = 0;
   let last = performance.now();
   const tick = (now) => {
     if (!canvas.isConnected || !canvas._animating) return;
     if (now - last >= FRAME_MS) {
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(
-        img,
-        i * sheet.frameW, 0,
-        sheet.frameW, sheet.frameH,
-        0, 0,
-        canvas.width, canvas.height,
-      );
-      i = (i + 1) % total;
+      drawFrame(canvas, img, sheet, f);
+      f = (f + 1) % total;
       last = now;
     }
     requestAnimationFrame(tick);
@@ -476,8 +460,7 @@ function startAnimate(canvas, img, sheet) {
 
 function stopAnimate(canvas) {
   canvas._animating = false;
-  // Hidden state — fall back to the flat placeholder so no fish image
-  // is visible until the user explicitly re-reveals.
+  // Hidden state — fall back to the flat placeholder.
   drawPlaceholder(canvas);
 }
 
@@ -488,11 +471,7 @@ function toggleReveal(name, rowEl) {
     for (const c of rowEl.querySelectorAll('canvas')) stopAnimate(c);
   } else {
     revealedRows.add(name);
-    for (const c of rowEl.querySelectorAll('canvas')) {
-      // First reveal triggers the lazy fetch + animate; subsequent
-      // reveals reuse the cached Image so the page doesn't re-load.
-      loadSheet(c);
-    }
+    for (const c of rowEl.querySelectorAll('canvas')) loadSheet(c);
   }
   const btn = rowEl.querySelector('.reveal-btn');
   if (btn) {
@@ -541,7 +520,7 @@ async function unskipFish(name, button) {
 }
 
 async function regenFish(name, button) {
-  if (!confirm(`Regenerate all 5 sheets for ${name}?\n(Existing sheets will be wiped — costs 5 fresh PixelLab calls.)`)) {
+  if (!confirm(`Regenerate all ${PER_FISH} sprite sheets for ${name}?\n(Existing sheets will be wiped — costs one fresh Veo call.)`)) {
     return;
   }
   button.disabled = true;
@@ -646,7 +625,7 @@ function renderGrid(rows) {
     div.className = 'row';
     rowEls.set(row.name, div);
 
-    const isComplete = row.sheets.length >= 5;
+    const isComplete = row.sheets.length >= PER_FISH;
     const isSkipped = skippedFish.has(row.name);
     const isQueued = regenQueue.has(row.name);
     const hasCustomRef = !!row.hasCustomRef || customRefs.has(row.name);
@@ -698,7 +677,7 @@ function renderGrid(rows) {
 
     const nameText = document.createElement('div');
     nameText.className = 'row-name-text';
-    nameText.innerHTML = `${row.name}<small>${row.sheets.length}/5 sheets</small>`;
+    nameText.innerHTML = `${row.name}<small>${row.sheets.length}/${PER_FISH} sheets</small>`;
     name.appendChild(nameText);
 
     const genPill = document.createElement('div');
@@ -789,15 +768,15 @@ function renderGrid(rows) {
     name.appendChild(btnRow);
     div.appendChild(name);
 
-    for (let i = 0; i < 5; i++) {
-      const sheet = row.sheets[i];
-      if (sheet) {
-        div.appendChild(makeCell(row.name, sheet));
+    for (let i = 0; i < PER_FISH; i++) {
+      const variant = row.sheets[i];
+      if (variant) {
+        div.appendChild(makeCell(row.name, variant));
       } else {
         const blank = document.createElement('div');
         blank.className = 'cell';
         blank.style.opacity = '0.35';
-        blank.innerHTML = '<canvas width="256" height="256"></canvas><div class="actions"><span class="idx">—</span></div>';
+        blank.innerHTML = '<div class="cell-blank"></div><div class="actions"><span class="idx">—</span></div>';
         div.appendChild(blank);
       }
     }
@@ -808,7 +787,7 @@ function renderGrid(rows) {
 
 function updateGeneratingHighlight(status) {
   const cur = (status && status.current) || '';
-  // _status.current is "<stem> <idx>/<total>" (or with trailing " (regen)")
+  // _status.current is "<stem> (veo)" (or "<stem> (veo regen)")
   const stem = cur.split(' ')[0] || null;
   const detail = stem ? cur.slice(stem.length).trim() : '';
 

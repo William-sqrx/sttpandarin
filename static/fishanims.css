@@ -318,7 +318,7 @@ main {
 }
 .row {
   display: grid;
-  grid-template-columns: 180px repeat(5, 1fr);
+  grid-template-columns: 180px repeat(4, 1fr);
   gap: 12px;
   align-items: stretch;
   padding: 12px;
@@ -547,10 +547,17 @@ main {
 }
 .cell canvas {
   width: 100%;
-  aspect-ratio: 1 / 1;
   background: #000;
   border-radius: 6px;
   image-rendering: pixelated;
+  display: block;
+  /* aspect-ratio is set inline per-canvas (cell frame is non-square). */
+}
+.cell .cell-blank {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #000;
+  border-radius: 6px;
 }
 .cell .actions {
   display: flex;
@@ -593,7 +600,7 @@ main {
   color: var(--ink);
 }
 @media (max-width: 900px) {
-  .row { grid-template-columns: 130px repeat(5, 1fr); gap: 6px; padding: 8px; }
+  .row { grid-template-columns: 130px repeat(4, 1fr); gap: 6px; padding: 8px; }
   .row-name { font-size: 12px; padding: 0 4px; }
   .ref-badge { font-size: 8px; padding: 1px 4px; }
   .cell { padding: 5px; gap: 5px; }
