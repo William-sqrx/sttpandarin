@@ -17,6 +17,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,6 +119,16 @@ _migrated_once = False
 _skip_fish: set[str] = set()
 _skip_set_loaded = False  # in-memory cache of persistent skips loaded yet?
 _regen_queue: list[str] = []  # FIFO of fish to fully regenerate (fresh clips)
+_log: "deque[str]" = deque(maxlen=200)  # recent activity lines, shown in the UI
+
+
+def _log_event(msg: str) -> None:
+    """Append a timestamped line to the in-memory activity log (surfaced in
+    the UI via the status endpoint) and echo it to stdout for Render logs."""
+    line = f"{datetime.now(timezone.utc).strftime('%H:%M:%S')} {msg}"
+    with _lock:
+        _log.append(line)
+    print(f"[fishanims] {msg}", flush=True)
 
 
 def _ensure_skip_set_loaded() -> None:
@@ -289,6 +300,13 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
     ref_black = _flatten_to_black(ref_bytes)
     prompt = _get_veo_prompt()
 
+    def _on_progress(elapsed: int, done: int, total: int) -> None:
+        with _lock:
+            _status.current = (
+                f"{stem} — Veo {done}/{total} clips ready ({elapsed}s)")
+
+    _log_event(f"{stem}{label}: requesting {PER_FISH} clips from Veo…")
+    veo_start = time.time()
     videos: list[bytes] | None = None
     last_err: Exception | None = None
     for attempt in (1, 2):
@@ -296,27 +314,31 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
             break
         try:
             videos = veo_gen.generate_videos(
-                ref_black, should_stop=_stop_flag.is_set, prompt=prompt)
+                ref_black, should_stop=_stop_flag.is_set, prompt=prompt,
+                on_progress=_on_progress)
             break
         except Exception as e:  # noqa: BLE001
             last_err = e
-            print(f"[fishanims] veo try {attempt} {stem}{label}: {e}", flush=True)
             # A Stop press aborts the Veo wait — don't burn a retry on it.
             if _stop_flag.is_set():
                 break
+            _log_event(f"{stem}{label}: Veo attempt {attempt} failed — {e}")
             if attempt < 2:
                 time.sleep(10)
     if not videos:
         if _stop_flag.is_set():
             # Aborted by a Stop press — not a failure, leave counters alone.
-            print(f"[fishanims] {stem}{label}: aborted (stop requested)",
-                  flush=True)
+            _log_event(f"{stem}{label}: aborted (stop requested)")
             return False
         with _lock:
             _status.failed += PER_FISH
             _status.last_error = f"{stem}{label}: {last_err}"
-        print(f"[fishanims] FAIL {stem}{label}: {last_err}", flush=True)
+        _log_event(f"{stem}{label}: FAILED — {last_err}")
         return False
+
+    _log_event(
+        f"{stem}{label}: Veo returned {len(videos)} clip(s) in "
+        f"{int(time.time() - veo_start)}s — building sprite sheets")
 
     # Replace — drop any prior docs so idx numbering stays clean (1..N).
     deleted = col.delete_many({"name": stem}).deleted_count
@@ -325,22 +347,23 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
               flush=True)
 
     saved = 0
+    n_clips = len(videos)
     for idx, mp4 in enumerate(videos[:PER_FISH], start=1):
         if _stop_flag.is_set():
             break
+        with _lock:
+            _status.current = f"{stem} — building sheet {idx}/{n_clips}"
         try:
             sheet_png, cols, rows, frames, fw, fh = \
                 veo_gen.video_to_sprite_sheet(mp4)
         except Exception as e:  # noqa: BLE001
-            print(f"[fishanims] sheet build FAIL {stem}/{idx}{label}: {e}",
-                  flush=True)
+            _log_event(f"{stem}/{idx}{label}: sheet build FAILED — {e}")
             with _lock:
                 _status.last_error = f"{stem}/{idx}{label}: sheet build — {e}"
             continue
         if len(sheet_png) > MAX_SHEET_BYTES:
-            print(f"[fishanims] skip {stem}/{idx}{label}: sheet too big "
-                  f"({len(sheet_png)//1024}KB > {MAX_SHEET_BYTES//1024}KB)",
-                  flush=True)
+            _log_event(f"{stem}/{idx}{label}: sheet too big "
+                       f"({len(sheet_png)//1024}KB) — skipped")
             continue
         doc = {
             "name": stem,
@@ -355,6 +378,8 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
         }
         if _save_sheet_doc(col, stem, idx, doc, label):
             saved += 1
+            _log_event(f"{stem}/{idx}{label}: sheet saved "
+                       f"({fw}×{fh}, {frames}f)")
 
     with _lock:
         _status.done += saved
@@ -362,6 +387,7 @@ def _generate_and_save_fish(col, stem: str, ref_bytes: bytes,
             _status.failed += (PER_FISH - saved)
             if saved == 0:
                 _status.last_error = f"{stem}{label}: no clips saved"
+    _log_event(f"{stem}{label}: complete — {saved}/{PER_FISH} sheets saved")
     return saved > 0
 
 
@@ -415,6 +441,8 @@ def _batch_loop() -> None:
 
         keepalive_thread.start()
         consecutive_fails = 0
+        _log_event(f"batch started — {len(pngs)} fish, "
+                   f"{PER_FISH} sheets each")
 
         for png in pngs:
             if _stop_flag.is_set():
@@ -478,11 +506,15 @@ def _batch_loop() -> None:
             _status.state = "stopped" if _stop_flag.is_set() else "finished"
             _status.finished_at = time.time()
             _status.current = ""
+        _log_event(f"batch {_status.state} — "
+                   f"done {_status.done} · skip {_status.skipped} · "
+                   f"fail {_status.failed}")
     except Exception as e:  # noqa: BLE001
         with _lock:
             _status.state = "error"
             _status.error = repr(e)
             _status.finished_at = time.time()
+        _log_event(f"batch ERROR — {e!r}")
     finally:
         keepalive_stop.set()
 
@@ -604,6 +636,7 @@ async def fishanims_batch_start(request: Request) -> JSONResponse:
     _ensure_skip_set_loaded()
     with _lock:
         _regen_queue.clear()
+        _log.clear()
     _thread = threading.Thread(target=_batch_loop, daemon=True)
     _thread.start()
     return JSONResponse({"ok": True, "state": "running"})
@@ -678,6 +711,7 @@ async def fishanims_batch_status(request: Request) -> JSONResponse:
             # otherwise be re-added as a row by the frontend's augmentRows.
             "skipped_fish": sorted(s for s in _skip_fish if s in ALLOWED_STEMS),
             "regen_queue": [r for r in _regen_queue if r in ALLOWED_STEMS],
+            "log": list(_log),
         })
 
 

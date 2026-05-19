@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fish Animations Gallery — Chinesely</title>
-<link rel="stylesheet" href="/static/fishanims.css?v=16">
+<link rel="stylesheet" href="/static/fishanims.css?v=17">
 </head>
 <body>
 <header class="topbar">
@@ -27,6 +27,10 @@
     <span id="status-current"></span>
   </div>
   <div id="error-banner" class="error-banner" hidden></div>
+  <div id="log-box" class="log-box" hidden>
+    <div class="log-head">Activity log</div>
+    <pre id="log-lines" class="log-lines"></pre>
+  </div>
   <p class="legend">
     Each row is one fish. Each cell is one of the 4 sprite sheets — a Veo
     clip cropped to the fish and packed into a 5×5 / 24-frame grid. The
@@ -92,6 +96,6 @@
   </div>
 </main>
 
-<script src="/static/fishanims.js?v=16"></script>
+<script src="/static/fishanims.js?v=17"></script>
 </body>
 </html>

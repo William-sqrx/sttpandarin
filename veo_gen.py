@@ -95,46 +95,24 @@ def veo_configured() -> tuple[bool, str]:
     return True, ""
 
 
-def generate_videos(ref_png: bytes, should_stop=None,
-                    prompt: str | None = None) -> list[bytes]:
-    """Animate one fish reference image into VEO_VIDEOS_PER_CALL looping MP4
-    clips via Veo 3.1 on Vertex AI. The reference is used as the first AND
-    last frame so each clip is a seamless loop. Blocks until Veo finishes
-    (typically a few minutes). Returns the raw MP4 bytes for every clip.
-
-    `prompt`, if given (and non-blank), is the text sent to Veo; otherwise
-    the built-in VEO_PROMPT is used. `should_stop`, if given, is a no-arg
-    callable polled once a second while waiting on Veo — when it returns
-    True the wait is abandoned and a RuntimeError is raised, so a Stop press
-    takes effect within ~1s instead of hanging until generation finishes.
-
-    Raises RuntimeError on any failure — the caller handles retry/counters.
-    """
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(
-        vertexai=True, project=VEO_PROJECT, location=VEO_LOCATION,
-    )
-    ref_image = types.Image(image_bytes=ref_png, mime_type="image/png")
-
-    prompt_text = (prompt or "").strip() or VEO_PROMPT
-    source = types.GenerateVideosSource(prompt=prompt_text, image=ref_image)
-    config = types.GenerateVideosConfig(
+def _run_one_clip(client, types_mod, ref_image, prompt_text: str,
+                  seed: int, should_stop=None) -> bytes:
+    """Run a single Veo generation (number_of_videos=1) and return the MP4
+    bytes. Polls until done, aborting promptly if should_stop fires."""
+    source = types_mod.GenerateVideosSource(prompt=prompt_text, image=ref_image)
+    config = types_mod.GenerateVideosConfig(
         aspect_ratio="16:9",
-        number_of_videos=VEO_VIDEOS_PER_CALL,
+        number_of_videos=1,
         duration_seconds=VEO_DURATION_SECS,
         person_generation="allow_all",
         generate_audio=False,
         resolution="720p",
-        seed=0,
+        seed=seed,
         last_frame=ref_image,
     )
-
     operation = client.models.generate_videos(
         model=VEO_MODEL, source=source, config=config,
     )
-
     deadline = time.time() + VEO_TIMEOUT_SECS
     while not operation.done:
         if time.time() > deadline:
@@ -147,31 +125,90 @@ def generate_videos(ref_png: bytes, should_stop=None,
         operation = client.operations.get(operation)
 
     response = operation.result
-    if not response:
-        raise RuntimeError("Veo returned no result")
-    generated = response.generated_videos or []
-    if not generated:
-        raise RuntimeError("Veo produced no videos")
+    if not response or not response.generated_videos:
+        raise RuntimeError("Veo produced no video")
+    gv = response.generated_videos[0]
+    vid = getattr(gv, "video", None)
+    data = getattr(vid, "video_bytes", None) if vid is not None else None
+    if not data and vid is not None and getattr(vid, "uri", None):
+        # SDK handed back a GCS/Files URI instead of inline bytes — pull
+        # the bytes down explicitly.
+        try:
+            client.files.download(file=vid)
+            data = getattr(vid, "video_bytes", None)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                f"Veo returned a URI ({vid.uri}) and download failed: {e}")
+    if not data:
+        raise RuntimeError("Veo video had no bytes")
+    return bytes(data)
 
+
+def generate_videos(ref_png: bytes, should_stop=None,
+                    prompt: str | None = None, on_progress=None) -> list[bytes]:
+    """Animate one fish reference image into VEO_VIDEOS_PER_CALL looping MP4
+    clips via Veo 3.1 on Vertex AI. The reference is used as the first AND
+    last frame so each clip is a seamless loop.
+
+    NOTE: with both a first frame and a last_frame pinned, Veo runs in
+    interpolation mode and returns only ONE video per call regardless of
+    number_of_videos. So this fires VEO_VIDEOS_PER_CALL separate calls
+    (each with its own random seed for variety) concurrently — roughly the
+    same wall-clock time as one call, but VEO_VIDEOS_PER_CALL distinct clips.
+
+    `prompt`, if given (and non-blank), is the text sent to Veo; otherwise
+    the built-in VEO_PROMPT is used. `should_stop`, if given, is a no-arg
+    callable polled while waiting — a Stop press aborts within ~1s.
+    `on_progress(elapsed_secs, done, total)`, if given, is called every
+    poll so the caller can surface live progress.
+
+    Returns the MP4 bytes of every clip that succeeded (at least one);
+    raises RuntimeError only if they all fail.
+    """
+    import concurrent.futures
+    import random
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(
+        vertexai=True, project=VEO_PROJECT, location=VEO_LOCATION,
+    )
+    ref_image = types.Image(image_bytes=ref_png, mime_type="image/png")
+    prompt_text = (prompt or "").strip() or VEO_PROMPT
+
+    seeds = [random.randint(1, 2 ** 31 - 1)
+             for _ in range(VEO_VIDEOS_PER_CALL)]
     out: list[bytes] = []
-    for gv in generated:
-        vid = getattr(gv, "video", None)
-        if vid is None:
-            continue
-        data = getattr(vid, "video_bytes", None)
-        if not data and getattr(vid, "uri", None):
-            # SDK handed back a GCS/Files URI instead of inline bytes —
-            # pull the bytes down explicitly.
+    errors: list[Exception] = []
+    start = time.time()
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=VEO_VIDEOS_PER_CALL) as pool:
+        futures = [
+            pool.submit(_run_one_clip, client, types, ref_image,
+                        prompt_text, seed, should_stop)
+            for seed in seeds
+        ]
+        while True:
+            done = sum(1 for f in futures if f.done())
+            if on_progress:
+                try:
+                    on_progress(int(time.time() - start), done, len(futures))
+                except Exception:  # noqa: BLE001
+                    pass
+            if done == len(futures) or (should_stop and should_stop()):
+                break
+            time.sleep(VEO_POLL_SECS)
+        for f in futures:
             try:
-                client.files.download(file=vid)
-                data = getattr(vid, "video_bytes", None)
+                out.append(f.result())
             except Exception as e:  # noqa: BLE001
-                raise RuntimeError(
-                    f"Veo returned a URI ({vid.uri}) and download failed: {e}")
-        if data:
-            out.append(bytes(data))
+                errors.append(e)
+
     if not out:
-        raise RuntimeError("Veo videos had no bytes")
+        raise RuntimeError(
+            f"all {VEO_VIDEOS_PER_CALL} Veo calls failed — "
+            f"{errors[0] if errors else 'unknown error'}")
     return out
 
 

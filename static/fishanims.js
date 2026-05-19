@@ -849,6 +849,22 @@ function renderStatus(s) {
   } else {
     errBanner.hidden = true;
   }
+
+  // Activity log — newest at the bottom; keep it pinned there unless the
+  // user has scrolled up to read history.
+  const logBox = document.getElementById('log-box');
+  const logLines = document.getElementById('log-lines');
+  if (logBox && logLines) {
+    if (s.log && s.log.length) {
+      const atBottom = logLines.scrollHeight - logLines.scrollTop
+        - logLines.clientHeight < 8;
+      logBox.hidden = false;
+      logLines.textContent = s.log.join('\n');
+      if (atBottom) logLines.scrollTop = logLines.scrollHeight;
+    } else {
+      logBox.hidden = true;
+    }
+  }
 }
 
 async function tick() {
