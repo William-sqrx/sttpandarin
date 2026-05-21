@@ -879,11 +879,17 @@ async def fishanims_upload_ref(
         }},
         upsert=True,
     )
+    # Stale clips were generated from the OLD ref — drop them so the
+    # gallery never shows an animation that doesn't match the new ref,
+    # and so a plain "Start" regenerates this fish instead of skipping it
+    # (the batch loop skips any fish that already has PER_FISH sheets).
+    wiped = fish_anims_col().delete_many({"name": name}).deleted_count
     return JSONResponse({
         "ok": True,
         "name": name,
         "bytes": len(data),
         "content_type": content_type,
+        "clips_wiped": wiped,
     })
 
 

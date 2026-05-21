@@ -22,3 +22,6 @@ newhsk/
 # Secrets
 .env
 .env.local
+veo-key.json
+*-key.json
+application_default_credentials.json

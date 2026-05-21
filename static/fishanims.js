@@ -875,7 +875,7 @@ async function tick() {
     if (batchRunning) {
       controlHint.textContent = '';
     } else if (status.state === 'finished') {
-      controlHint.textContent = 'all done — click Start to add more / regenerate';
+      controlHint.textContent = 'all done — Start adds only NEW fish; use a row’s Regen to redo an existing one';
     } else if (status.state === 'stopped') {
       controlHint.textContent = 'stopped — click Start to resume';
     } else if (status.state === 'error') {
