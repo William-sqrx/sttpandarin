@@ -508,15 +508,25 @@ def _batch_loop(regen_only: bool = False) -> None:
             # Veo was running so regen takes effect promptly.
             _drain_regen_queue(col, pngs)
 
-        # Drain the regen queue — the only work in a regen-only run, and a
-        # final sweep otherwise (picks up regens queued for already-done fish).
-        _drain_regen_queue(col, pngs)
-
+        # Final drain of the regen queue (the only work in a regen-only run;
+        # a closing sweep otherwise). Looped: a regen can be queued in the
+        # tiny window between the drain emptying the queue and the run being
+        # marked finished. We commit to "finished" ONLY while holding the
+        # lock with a verified-empty queue — so a request that lands in that
+        # window is caught and drained here instead of being stranded with
+        # no worker to run it (the requester saw state still "running" and
+        # trusted this worker to handle it).
         mode = "regen run" if regen_only else "batch"
-        with _lock:
-            _status.state = "stopped" if _stop_flag.is_set() else "finished"
-            _status.finished_at = time.time()
-            _status.current = ""
+        while True:
+            _drain_regen_queue(col, pngs)
+            with _lock:
+                if not _regen_queue or _stop_flag.is_set():
+                    _status.state = (
+                        "stopped" if _stop_flag.is_set() else "finished")
+                    _status.finished_at = time.time()
+                    _status.current = ""
+                    break
+                # Queue refilled in the race window — loop and drain again.
         _log_event(f"{mode} {_status.state} — "
                    f"done {_status.done} · skip {_status.skipped} · "
                    f"fail {_status.failed}")
@@ -729,6 +739,15 @@ async def fishanims_batch_regen(name: str, request: Request) -> JSONResponse:
 async def fishanims_batch_status(request: Request) -> JSONResponse:
     _ensure_skip_set_loaded()
     with _lock:
+        # Reconcile a stale "running" — if the worker thread is gone but
+        # status still says running (process killed mid-run, or an old
+        # uncaught path), don't report a run that isn't actually happening.
+        if (_status.state == "running"
+                and (_thread is None or not _thread.is_alive())):
+            _status.state = "error"
+            _status.error = _status.error or "worker stopped unexpectedly"
+            _status.finished_at = _status.finished_at or time.time()
+            _status.current = ""
         return JSONResponse({
             "state": _status.state,
             "total": _status.total,
