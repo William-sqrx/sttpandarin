@@ -11,6 +11,7 @@
       sessionStorage.setItem("hskUnlocked", "1");
     }
     if (t.dataset.tab === "fish") { window.location.href = "/fishgen"; return; }
+    if (t.dataset.tab === "image") { window.location.href = "/imagegen"; return; }
     tabs.forEach(x => x.classList.toggle("active", x === t));
     panels.forEach(p => { document.getElementById("panel-" + p).hidden = t.dataset.tab !== p; });
   }));

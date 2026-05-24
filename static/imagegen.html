@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Studio — Chinesely</title>
+<link rel="stylesheet" href="/static/imagegen.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Image studio</h1>
+  <div class="meta">
+    <span id="openai-status" class="badge">OpenAI: …</span>
+    <span id="gemini-status" class="badge">Gemini: …</span>
+    <a class="back" href="/">← back</a>
+  </div>
+</header>
+
+<main>
+  <p class="legend">
+    Upload one input image, attach any number of style references, edit + save your prompt,
+    then run it through <strong>Nano Banana Pro</strong> or <strong>OpenAI gpt-image-1.5</strong>.
+  </p>
+
+  <section class="card">
+    <div class="card-header">
+      <h2>1. Input image</h2>
+    </div>
+    <div class="drop-zone" id="input-zone">
+      <img id="input-preview" hidden>
+      <div class="drop-placeholder" id="input-placeholder">
+        Drop an image here, or <label for="input-file" class="link">browse</label>
+      </div>
+      <input type="file" id="input-file" accept="image/*" hidden>
+      <button class="btn ghost small clear" id="input-clear" hidden>×</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <h2>2. Style references</h2>
+      <span class="muted" id="refs-count">0 saved</span>
+    </div>
+    <div class="refs-grid" id="refs-grid"></div>
+    <div class="refs-add">
+      <label class="btn ghost small" for="ref-file">+ Add reference</label>
+      <input type="file" id="ref-file" accept="image/*" hidden multiple>
+      <span class="muted small">Persisted on the server — reused on every run.</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <h2>3. Prompt</h2>
+      <div class="prompt-actions">
+        <button class="btn ghost small" id="prompt-reset" type="button">Reset to default</button>
+        <button class="btn small" id="prompt-save" type="button">Save</button>
+      </div>
+    </div>
+    <textarea id="prompt" rows="10" spellcheck="false"></textarea>
+    <div class="muted small" id="prompt-status">Loading…</div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <h2>4. Run</h2>
+    </div>
+    <div class="run-row">
+      <div class="provider-toggle" role="group" aria-label="Model">
+        <button class="provider active" data-provider="gemini" type="button">Nano Banana Pro</button>
+        <button class="provider" data-provider="openai" type="button">OpenAI 1.5</button>
+      </div>
+      <button class="btn primary" id="run-btn" type="button" disabled>Generate</button>
+      <span class="muted small" id="run-status"></span>
+    </div>
+  </section>
+
+  <section class="card" id="result-card" hidden>
+    <div class="card-header">
+      <h2>Result</h2>
+      <a class="btn ghost small" id="result-download" download="generated.png">Download</a>
+    </div>
+    <div class="result-wrap">
+      <img id="result-img">
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+
+<template id="ref-template">
+  <div class="ref-tile">
+    <img class="ref-img" alt="">
+    <button class="ref-del" type="button" title="Remove">×</button>
+  </div>
+</template>
+
+<script src="/static/imagegen.js"></script>
+</body>
+</html>

@@ -865,3 +865,6 @@ app.include_router(fishgen.router)
 import fish_anims  # noqa: E402
 app.include_router(fish_anims.router)
 
+import imagegen  # noqa: E402
+app.include_router(imagegen.router)
+
