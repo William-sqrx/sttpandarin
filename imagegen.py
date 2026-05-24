@@ -29,10 +29,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1.5")
 OPENAI_BASE = os.getenv("OPENAI_BASE", "https://api.openai.com/v1")
 
-# Nano Banana Pro = gemini-3-pro-image-preview on Vertex AI.
+# Nano Banana Pro = gemini-3-pro-image-preview on Vertex AI. It is
+# published in the `global` location (NOT us-central1, which is where
+# Veo 3.1 lives), so we keep a dedicated GEMINI_LOCATION env var.
 GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3-pro-image-preview")
 GEMINI_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "")
-GEMINI_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+GEMINI_LOCATION = os.getenv("GEMINI_LOCATION", "global")
 
 APP_DIR = Path(__file__).resolve().parent
 IG_DIR = APP_DIR / "imagegen"
