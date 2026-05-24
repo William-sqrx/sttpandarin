@@ -45,20 +45,65 @@ STATIC_DIR = APP_DIR / "static"
 
 PROMPT_PATH = IG_DIR / "prompt.txt"
 
-DEFAULT_PROMPT = (
-    "Warm cozy semi-cartoon digital illustration portrait of a young Asian man "
-    "at a scenic mountain overlook during golden hour, chest-up composition, "
-    "soft cinematic sunset lighting, Zhangjiajie-style sandstone mountains in "
-    "background, warm orange sunlight mixed with cool atmospheric haze, "
-    "relaxed confident expression, detailed dark winter jacket with fur hood, "
-    "leaning on rustic wooden railing, painterly stylized rendering, subtle "
-    "pixel-art texture only, NOT heavily pixelated, clean attractive face, "
-    "anime-inspired realism, soft shading, premium profile-picture composition, "
-    "emotionally warm and aspirational, modern cozy illustration style, "
-    "detailed environment but secondary to character, smooth facial rendering, "
-    "gentle outlines, slightly cartoonized proportions, high visual clarity, "
-    "beautiful lighting, social-media-worthy aesthetic"
-)
+DEFAULT_PROMPT = """\
+Transform the uploaded photo into a cozy cinematic pixel-art portrait with a hand-crafted retro game aesthetic.
+
+Style requirements:
+
+Detailed pixel-art illustration, not realistic photography
+Painterly pixel shading with visible pixel texture
+Clean pixel clusters, intentional dithering, limited color palette
+High-detail environment with layered depth
+Cozy indie-game vibe similar to premium pixel RPG splash art
+Character should remain recognizable while becoming slightly stylized/cartoonized
+Smooth attractive face rendering, not overly blocky or noisy
+Preserve the original pose, composition, expression, clothing, and camera angle
+Rich atmospheric perspective and depth
+Avoid flat pixel art or cheap retro filters
+Avoid excessive realism
+Avoid over-pixelation
+Keep edges clean and aesthetically pleasing for profile-picture usage
+
+Rendering characteristics:
+
+Sharp silhouette
+Soft cinematic contrast
+Deep navy/bluish shadows
+Amber/orange highlights
+Slight glow from warm light sources
+High visual clarity even at small size
+Premium modern pixel-art game illustration quality
+
+Composition rules:
+
+Character occupies around 40–60% of frame
+Slight zoom-in suitable for social media profile photos
+Face must remain clear and readable
+Maintain centered visual focus
+Background supports the character instead of distracting from them
+
+Negative prompts:
+
+blurry
+low detail
+muddy colors
+realistic skin texture
+AI-looking face
+distorted anatomy
+extra fingers
+noisy pixels
+random artifacts
+anime style
+chibi
+flat shading
+vector art
+3D render
+oil painting
+watercolor
+oversaturated neon colors
+cheap 8-bit filter
+mosaic effect
+low-resolution sprite look"""
 
 
 def _read_prompt() -> str:
@@ -85,12 +130,35 @@ def _openai_generate(prompt: str, input_png: bytes,
     if not OPENAI_API_KEY:
         raise HTTPException(400, "OPENAI_API_KEY not configured on server")
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-    files = [("image[]", ("input.png", input_png, "image/png"))]
+    files = [("image[]", ("subject.png", input_png, "image/png"))]
     for i, ref in enumerate(ref_pngs):
-        files.append(("image[]", (f"ref{i}.png", ref, "image/png")))
+        files.append(("image[]", (f"style_ref_{i+1}.png", ref, "image/png")))
+
+    # gpt-image-1.5 /images/edits with multiple images treats them as an
+    # unordered bag. The model has no built-in concept of "subject vs
+    # style reference" — that distinction has to live in the PROMPT.
+    # We prepend explicit role labels so the first image is treated as
+    # the subject and the rest are read as style anchors.
+    if ref_pngs:
+        n = len(ref_pngs)
+        labeled = (
+            f"You are given {n + 1} attached images. The FIRST image "
+            f"(subject.png) is the SUBJECT — keep its identity, pose, "
+            f"and composition as the basis of the output. The next "
+            f"{n} image{'s' if n != 1 else ''} (style_ref_1"
+            + (f"…style_ref_{n}" if n > 1 else "")
+            + ") are STYLE REFERENCES — match their art style, "
+            "rendering, palette, line quality, texture, and overall "
+            "aesthetic exactly. Do NOT copy their subject matter or "
+            "composition; only their visual style.\n\n"
+            "STYLE DESCRIPTION + EXTRA DIRECTION:\n"
+        ) + prompt
+    else:
+        labeled = prompt
+
     data = {
         "model": OPENAI_IMAGE_MODEL,
-        "prompt": prompt,
+        "prompt": labeled,
         "n": "1",
         "size": "1024x1024",
         "quality": "high",
@@ -131,13 +199,40 @@ def _gemini_generate(prompt: str, input_png: bytes,
         vertexai=True, project=GEMINI_PROJECT, location=GEMINI_LOCATION,
     )
 
-    # Build contents: text prompt first, then input image, then any refs.
+    # Gemini sees all attached images as an unlabeled set unless we
+    # interleave text labels between them. Nano Banana Pro responds
+    # well to explicit role labels — the recommended pattern is
+    # text → image → text → image → … so the model can distinguish
+    # subject from style references.
     parts: list = [
-        types.Part.from_text(text=prompt),
+        types.Part.from_text(
+            text=(
+                "Task: regenerate the SUBJECT image below in the visual "
+                "style of the STYLE REFERENCE image(s) that follow. "
+                "Preserve the subject's identity, pose, and composition "
+                "from the subject image. Match the art style, rendering, "
+                "palette, line quality, texture, and overall aesthetic "
+                "of the style references — do NOT copy their subject "
+                "matter or composition."
+            )
+        ),
+        types.Part.from_text(text="SUBJECT IMAGE:"),
         types.Part.from_bytes(data=input_png, mime_type="image/png"),
     ]
-    for ref in ref_pngs:
-        parts.append(types.Part.from_bytes(data=ref, mime_type="image/png"))
+    if ref_pngs:
+        parts.append(types.Part.from_text(
+            text=f"STYLE REFERENCE IMAGE{'S' if len(ref_pngs) != 1 else ''} "
+                 f"(match this aesthetic exactly):"
+        ))
+        for i, ref in enumerate(ref_pngs):
+            if len(ref_pngs) > 1:
+                parts.append(types.Part.from_text(
+                    text=f"Style reference {i + 1} of {len(ref_pngs)}:"
+                ))
+            parts.append(types.Part.from_bytes(data=ref, mime_type="image/png"))
+    parts.append(types.Part.from_text(
+        text="STYLE DESCRIPTION + EXTRA DIRECTION:\n" + prompt
+    ))
 
     config = types.GenerateContentConfig(
         response_modalities=["IMAGE"],
