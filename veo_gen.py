@@ -14,7 +14,7 @@ import os
 import time
 
 VEO_MODEL = "veo-3.1-generate-001"
-VEO_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "project-8bef1a01-fc2b-4e71-a8e")
+VEO_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "hskfish")
 VEO_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 VEO_VIDEOS_PER_CALL = 4      # one Veo call yields this many clip variants
