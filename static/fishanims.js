@@ -248,7 +248,7 @@ async function startBatch() {
       throw new Error(`${r.status} ${text.slice(0, 120)}`);
     }
     // Refresh state immediately so the user sees the running state.
-    setTimeout(tick, 200);
+    requestTick();
   } catch (e) {
     alert(`start failed: ${e.message}`);
   } finally {
@@ -270,7 +270,7 @@ async function stopBatch() {
       credentials: 'same-origin',
     });
     if (!r.ok) throw new Error(`${r.status}`);
-    setTimeout(tick, 200);
+    requestTick();
   } catch (e) {
     alert(`stop failed: ${e.message}`);
   } finally {
@@ -497,7 +497,7 @@ async function skipFish(name, button) {
     button.textContent = 'Skip rest →';
     alert(`skip failed: ${e.message}`);
   }
-  tick();
+  requestTick();
 }
 
 async function unskipFish(name, button) {
@@ -516,7 +516,7 @@ async function unskipFish(name, button) {
     button.textContent = '✗ unskip';
     alert(`unskip failed: ${e.message}`);
   }
-  tick();
+  requestTick();
 }
 
 async function regenFish(name, button) {
@@ -539,7 +539,7 @@ async function regenFish(name, button) {
     regenQueue.add(name);
     button.textContent = 'queued';
     button.classList.add('queued');
-    setTimeout(tick, 200);
+    requestTick();
   } catch (e) {
     button.disabled = false;
     button.textContent = 'Regen ↻';
@@ -578,7 +578,7 @@ async function uploadRef(name, file, button, refImg) {
     // Flag so the row re-renders with the "Custom" badge + reset btn.
     customRefs.add(name);
     lastListKey = '';
-    tick();
+    requestTick();
   } catch (e) {
     alert(`upload failed: ${e.message}`);
     button.disabled = false;
@@ -600,7 +600,7 @@ async function resetRef(name, button) {
     if (!r.ok) throw new Error(`${r.status}`);
     customRefs.delete(name);
     lastListKey = '';
-    tick();
+    requestTick();
   } catch (e) {
     alert(`reset failed: ${e.message}`);
     button.disabled = false;
@@ -921,9 +921,66 @@ async function tick() {
   // (which would restart canvas animations).
   updateGeneratingHighlight(status);
 
-  const fast = batchRunning;
-  setTimeout(tick, fast ? POLL_MS : POLL_MS * 4);
+  // The driver (runTick) reschedules — tick() just reports whether the
+  // batch is running so the cadence can speed up while work is happening.
+  return batchRunning;
 }
+
+// ---- Polling driver --------------------------------------------------------
+// A SINGLE rescheduling loop drives the poll. It must be:
+//   • crash-safe — a thrown error logs and STILL reschedules. The old bare
+//     `setTimeout(tick, …)` at the end of tick() meant one uncaught throw
+//     killed polling forever, freezing the page on its last frame (status
+//     bar stuck on "running", a finished regen never reflected).
+//   • single-flight — start/stop/skip/regen/upload all funnel through
+//     requestTick() instead of calling tick()/setTimeout(tick) directly, so
+//     a user action can't spawn a SECOND parallel loop. Overlapping loops
+//     were racing each other's awaits and tearing the UI (status bar
+//     "running" while the controls below said "idle") and hammering the
+//     server — worse with every extra click.
+let tickTimer = null;
+let tickInFlight = false;
+let tickQueued = false;  // a refresh was requested while a tick was running
+
+function scheduleTick(delay) {
+  if (tickTimer) clearTimeout(tickTimer);
+  tickTimer = setTimeout(runTick, delay);
+}
+
+// Ask for a refresh ASAP without starting a parallel loop. If a tick is
+// already in flight we just flag it; the in-flight tick re-runs once it
+// settles (coalescing a burst of actions into one extra poll).
+function requestTick() {
+  if (tickInFlight) { tickQueued = true; return; }
+  scheduleTick(0);
+}
+
+async function runTick() {
+  tickTimer = null;
+  if (tickInFlight) { tickQueued = true; return; }
+  tickInFlight = true;
+  let fast = false;
+  try {
+    fast = await tick();
+  } catch (e) {
+    console.error('[fishanims] poll tick failed — will retry', e);
+  } finally {
+    tickInFlight = false;
+    if (tickQueued) {
+      tickQueued = false;
+      scheduleTick(0);
+    } else {
+      scheduleTick(fast ? POLL_MS : POLL_MS * 4);
+    }
+  }
+}
+
+// Coming back to a backgrounded tab: refresh immediately so a job that
+// finished (or the dyno restarting) while you were away on another tab shows
+// the current state instead of a stale snapshot.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) requestTick();
+});
 
 // ----- Veo prompt editor ----------------------------------------------------
 // Loads the current prompt once, lets the user edit + save it. Saved text is
@@ -992,4 +1049,4 @@ async function tick() {
   });
 })();
 
-tick();
+runTick();
