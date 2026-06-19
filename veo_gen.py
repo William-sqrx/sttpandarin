@@ -121,16 +121,21 @@ def _run_one_clip(client, types_mod, ref_image, prompt_text: str,
     """Run a single Veo generation (number_of_videos=1) and return the MP4
     bytes. Polls until done, aborting promptly if should_stop fires."""
     source = types_mod.GenerateVideosSource(prompt=prompt_text, image=ref_image)
-    config = types_mod.GenerateVideosConfig(
+    config_kwargs = dict(
         aspect_ratio="16:9",
         number_of_videos=1,
         duration_seconds=VEO_DURATION_SECS,
         person_generation=_PERSON_GENERATION,
         generate_audio=False,
         resolution="720p",
-        seed=seed,
         last_frame=ref_image,
     )
+    # `seed` is only supported on Vertex AI ("Enterprise Agent Platform"
+    # mode); the Developer (API-key) path rejects it. Omit it there — the 4
+    # concurrent calls still vary via Veo's own internal randomness.
+    if not gemini_client.using_api_key():
+        config_kwargs["seed"] = seed
+    config = types_mod.GenerateVideosConfig(**config_kwargs)
     operation = client.models.generate_videos(
         model=VEO_MODEL, source=source, config=config,
     )
