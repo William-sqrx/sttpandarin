@@ -126,15 +126,18 @@ def _run_one_clip(client, types_mod, ref_image, prompt_text: str,
         number_of_videos=1,
         duration_seconds=VEO_DURATION_SECS,
         person_generation=_PERSON_GENERATION,
-        generate_audio=False,
         resolution="720p",
         last_frame=ref_image,
     )
-    # `seed` is only supported on Vertex AI ("Enterprise Agent Platform"
-    # mode); the Developer (API-key) path rejects it. Omit it there — the 4
-    # concurrent calls still vary via Veo's own internal randomness.
+    # `seed` and `generate_audio` are Vertex-only ("Enterprise Agent Platform"
+    # mode); the Developer (API-key) path rejects both. Gate them on the Vertex
+    # path only. On the API-key path Veo 3 generates audio by default — that's
+    # harmless here since we sample video frames into the sprite sheet and
+    # throw the soundtrack away. Seed is dropped too (the 4 concurrent calls
+    # still vary via Veo's own internal randomness).
     if not gemini_client.using_api_key():
         config_kwargs["seed"] = seed
+        config_kwargs["generate_audio"] = False
     config = types_mod.GenerateVideosConfig(**config_kwargs)
     operation = client.models.generate_videos(
         model=VEO_MODEL, source=source, config=config,
