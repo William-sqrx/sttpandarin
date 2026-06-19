@@ -38,6 +38,14 @@ VEO_DURATION_SECS = 4
 VEO_POLL_SECS = 10
 VEO_TIMEOUT_SECS = 600       # give up on a single fish after 10 minutes
 
+# The Developer (API-key) path has much tighter Veo rate limits than Vertex.
+# Firing all VEO_VIDEOS_PER_CALL requests at once trips 429 RESOURCE_EXHAUSTED,
+# so run them one at a time there (each clip submits + polls sequentially, well
+# under any per-minute cap). Vertex can absorb the full concurrent burst.
+# Override with VEO_CONCURRENCY from the dashboard if quota allows more.
+_DEFAULT_CONCURRENCY = 1 if gemini_client.using_api_key() else VEO_VIDEOS_PER_CALL
+VEO_CONCURRENCY = max(1, int(os.getenv("VEO_CONCURRENCY", _DEFAULT_CONCURRENCY)))
+
 # ----- Sprite-sheet post-processing -----------------------------------------
 SHEET_COLS = 5
 SHEET_ROWS = 5
@@ -210,7 +218,7 @@ def generate_videos(ref_png: bytes, should_stop=None,
     errors: list[Exception] = []
     start = time.time()
     with concurrent.futures.ThreadPoolExecutor(
-            max_workers=VEO_VIDEOS_PER_CALL) as pool:
+            max_workers=VEO_CONCURRENCY) as pool:
         futures = [
             pool.submit(_run_one_clip, client, types, ref_image,
                         prompt_text, seed, should_stop)
