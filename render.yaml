@@ -8,5 +8,13 @@ services:
         sync: false
       - key: DASHSCOPE_API_KEY
         sync: false
+      # Google AI Studio API key (Veo fish anims + Gemini image gen). Set this
+      # in the Render dashboard to the key for the wondergirlll127 account.
+      - key: GEMINI_API_KEY
+        sync: false
+      # Optional: override the Veo model id from the dashboard (no redeploy)
+      # if Google renames it on the Developer API.
+      - key: VEO_MODEL
+        sync: false
       - key: SESSION_SECRET
         generateValue: true

@@ -22,6 +22,8 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
+import gemini_client
+
 
 # ----- Config ----------------------------------------------------------------
 
@@ -183,21 +185,23 @@ def _openai_generate(prompt: str, input_png: bytes,
 
 def _gemini_generate(prompt: str, input_png: bytes,
                      ref_pngs: list[bytes]) -> bytes:
-    if not GEMINI_PROJECT:
-        raise HTTPException(400, "GOOGLE_CLOUD_PROJECT not set on server")
-    cred = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
-    if not cred or not os.path.isfile(cred):
-        raise HTTPException(
-            400, "GOOGLE_APPLICATION_CREDENTIALS not set or file missing")
+    # Developer API key path needs nothing else; the Vertex path still needs
+    # a project + service-account JSON.
+    if not gemini_client.using_api_key():
+        if not GEMINI_PROJECT:
+            raise HTTPException(
+                400, "set GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT on server")
+        cred = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if not cred or not os.path.isfile(cred):
+            raise HTTPException(
+                400, "set GEMINI_API_KEY or GOOGLE_APPLICATION_CREDENTIALS")
     try:
-        from google import genai
         from google.genai import types
     except ImportError as e:
         raise HTTPException(500, f"google-genai SDK not installed: {e}")
 
-    client = genai.Client(
-        vertexai=True, project=GEMINI_PROJECT, location=GEMINI_LOCATION,
-    )
+    # API-key (Developer API) when GEMINI_API_KEY is set, else Vertex AI.
+    client = gemini_client.new_client(GEMINI_PROJECT, GEMINI_LOCATION)
 
     # Gemini sees all attached images as an unlabeled set unless we
     # interleave text labels between them. Nano Banana Pro responds
@@ -285,10 +289,12 @@ async def imagegen_page(request: Request) -> Response:
 async def imagegen_config(request: Request) -> JSONResponse:
     _auth(request)
     cred = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    gemini_ok = gemini_client.using_api_key() or bool(
+        GEMINI_PROJECT and cred and os.path.isfile(cred))
     return JSONResponse({
         "openai_configured": bool(OPENAI_API_KEY),
         "openai_model": OPENAI_IMAGE_MODEL,
-        "gemini_configured": bool(GEMINI_PROJECT and cred and os.path.isfile(cred)),
+        "gemini_configured": gemini_ok,
         "gemini_model": GEMINI_IMAGE_MODEL,
     })
 

@@ -13,9 +13,25 @@ from __future__ import annotations
 import os
 import time
 
-VEO_MODEL = "veo-3.1-generate-001"
+import gemini_client
+
 VEO_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "hskfish")
 VEO_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+# The Veo model id differs between the two auth paths: Vertex AI publishes
+# "veo-3.1-generate-001"; the Developer (AI Studio) API uses a "-preview"
+# suffix. Pick a sane default per mode and let VEO_MODEL override it from the
+# Render dashboard if Google renames the model.
+_DEFAULT_VEO_MODEL = ("veo-3.1-generate-preview"
+                      if gemini_client.using_api_key()
+                      else "veo-3.1-generate-001")
+VEO_MODEL = os.getenv("VEO_MODEL", _DEFAULT_VEO_MODEL)
+
+# Image-to-video on the Developer (API-key) path rejects "allow_all" — that
+# value is Vertex-only; the key path accepts only "allow_adult"/"dont_allow".
+# Refs are fish, so "allow_adult" is equally unrestrictive.
+_PERSON_GENERATION = ("allow_adult" if gemini_client.using_api_key()
+                      else "allow_all")
 
 VEO_VIDEOS_PER_CALL = 4      # one Veo call yields this many clip variants
 VEO_DURATION_SECS = 4
@@ -85,11 +101,16 @@ def veo_configured() -> tuple[bool, str]:
     """Return (ok, reason). When ok is False, generation will fail — the
     batch/start endpoint surfaces `reason` so the user gets a clear error
     instead of a mid-batch crash."""
+    # Developer API key path — nothing else required.
+    if gemini_client.using_api_key():
+        return True, ""
+    # Vertex AI path — needs a project + service-account JSON.
     if not VEO_PROJECT:
-        return False, "GOOGLE_CLOUD_PROJECT not set"
+        return False, "set GEMINI_API_KEY (recommended) or GOOGLE_CLOUD_PROJECT"
     cred = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
     if not cred:
-        return False, "GOOGLE_APPLICATION_CREDENTIALS not set"
+        return False, ("set GEMINI_API_KEY (recommended) or "
+                       "GOOGLE_APPLICATION_CREDENTIALS")
     if not os.path.isfile(cred):
         return False, f"service-account file not found: {cred}"
     return True, ""
@@ -104,7 +125,7 @@ def _run_one_clip(client, types_mod, ref_image, prompt_text: str,
         aspect_ratio="16:9",
         number_of_videos=1,
         duration_seconds=VEO_DURATION_SECS,
-        person_generation="allow_all",
+        person_generation=_PERSON_GENERATION,
         generate_audio=False,
         resolution="720p",
         seed=seed,
@@ -168,12 +189,10 @@ def generate_videos(ref_png: bytes, should_stop=None,
     import concurrent.futures
     import random
 
-    from google import genai
     from google.genai import types
 
-    client = genai.Client(
-        vertexai=True, project=VEO_PROJECT, location=VEO_LOCATION,
-    )
+    # API-key (Developer API) when GEMINI_API_KEY is set, else Vertex AI.
+    client = gemini_client.new_client(VEO_PROJECT, VEO_LOCATION)
     ref_image = types.Image(image_bytes=ref_png, mime_type="image/png")
     prompt_text = (prompt or "").strip() or VEO_PROMPT
 
