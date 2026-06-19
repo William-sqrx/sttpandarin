@@ -27,11 +27,11 @@ _DEFAULT_VEO_MODEL = ("veo-3.1-generate-preview"
                       else "veo-3.1-generate-001")
 VEO_MODEL = os.getenv("VEO_MODEL", _DEFAULT_VEO_MODEL)
 
-# Image-to-video on the Developer (API-key) path rejects "allow_all" — that
-# value is Vertex-only; the key path accepts only "allow_adult"/"dont_allow".
-# Refs are fish, so "allow_adult" is equally unrestrictive.
-_PERSON_GENERATION = ("allow_adult" if gemini_client.using_api_key()
-                      else "allow_all")
+# personGeneration="allow_all" is accepted on BOTH Vertex and the Developer
+# API (verified by direct probe). Counter-intuitively the Developer API
+# *rejects* "allow_adult"/"dont_allow" for video (400 not-supported) — so do
+# NOT branch this per mode; allow_all is the value that works everywhere.
+_PERSON_GENERATION = "allow_all"
 
 VEO_VIDEOS_PER_CALL = 4      # one Veo call yields this many clip variants
 VEO_DURATION_SECS = 4
