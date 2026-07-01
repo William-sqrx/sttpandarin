@@ -12,6 +12,7 @@
     }
     if (t.dataset.tab === "fish") { window.location.href = "/fishgen"; return; }
     if (t.dataset.tab === "image") { window.location.href = "/imagegen"; return; }
+    if (t.dataset.tab === "soundmap") { window.location.href = "/soundmap"; return; }
     tabs.forEach(x => x.classList.toggle("active", x === t));
     panels.forEach(p => { document.getElementById("panel-" + p).hidden = t.dataset.tab !== p; });
   }));

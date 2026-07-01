@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pinyin Sound Map — Chinesely</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/soundmap.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><a href="/" class="home-link">Chinesely</a> · Pinyin Sound Map</div>
+    <form method="post" action="/logout"><button class="link">Log out</button></form>
+  </header>
+
+  <main class="container sm-container">
+    <h1>Pinyin sound map</h1>
+    <p class="muted">
+      How every pinyin syllable is broken into a <b>starting sound (initial)</b> + a
+      <b>rest (final)</b>, each matched to a sound inside a familiar English or
+      Bahasa word — e.g. <code>hǎo</code> → “h” like <b>h</b>at + “ao” like n<b>ow</b>.
+      This is the same table the in-app pronunciation coach card uses. Edit any word
+      or the underlined sound below; changes save in this browser and update the live
+      preview. Use <b>Copy JS</b> / <b>Download JSON</b> to take edits back to the app.
+    </p>
+
+    <!-- ── Live tester ─────────────────────────────────────────── -->
+    <section class="sm-card sm-tester">
+      <label class="sm-tester-label" for="sm-try">Try a syllable</label>
+      <input id="sm-try" type="text" placeholder="hǎo · zhōng · xué · nǐ · shì" autocomplete="off" spellcheck="false">
+      <p class="muted sm-tester-hint">Tone marks or numbers both work (e.g. <code>hao3</code>).</p>
+      <div id="sm-try-out" class="sm-try-out"></div>
+    </section>
+
+    <!-- ── Toolbar ─────────────────────────────────────────────── -->
+    <div class="sm-toolbar">
+      <input id="sm-filter" type="text" class="sm-filter" placeholder="Filter by pinyin (e.g. ang, zh, i)…" autocomplete="off">
+      <div class="sm-toolbar-spacer"></div>
+      <button id="sm-copy" class="btn-secondary" type="button">Copy JS</button>
+      <button id="sm-download" class="btn-secondary" type="button">Download JSON</button>
+      <button id="sm-reset" class="btn-danger" type="button">Reset to defaults</button>
+    </div>
+    <p id="sm-saved" class="sm-saved" hidden></p>
+
+    <!-- ── Editable tables (filled by JS) ──────────────────────── -->
+    <section class="sm-section">
+      <h2>Initials <span class="muted sm-count" id="sm-initials-count"></span></h2>
+      <p class="muted">The starting consonant of a syllable (the longest match wins, so <code>zh/ch/sh</code> beat <code>z/c/s</code>).</p>
+      <div class="sm-table-wrap"><table class="sm-table" id="sm-initials"></table></div>
+    </section>
+
+    <section class="sm-section">
+      <h2>Finals <span class="muted sm-count" id="sm-finals-count"></span></h2>
+      <p class="muted">Everything after the initial (the vowel/rime). Keyed by the <i>spoken</i> rime — pinyin spelling like <code>ju</code>, <code>yao</code>, <code>zhi</code> is normalized to these keys before lookup.</p>
+      <div class="sm-table-wrap"><table class="sm-table" id="sm-finals"></table></div>
+    </section>
+
+    <section class="sm-section">
+      <h2>Whole-syllable overrides <span class="muted sm-count" id="sm-syllables-count"></span></h2>
+      <p class="muted">The buzzed <code>-i</code> syllables (<code>zi/ci/si/zhi/chi/shi/ri</code>) have no separable vowel, so the whole syllable maps as one unit.</p>
+      <div class="sm-table-wrap"><table class="sm-table" id="sm-syllables"></table></div>
+    </section>
+
+    <section class="sm-section">
+      <h2>Split finals <span class="muted">(reference)</span></h2>
+      <p class="muted">Rimes with no single familiar word are taught as two chunks — a glide + a base rime that each reuse a Final above. Read-only.</p>
+      <div class="sm-table-wrap"><table class="sm-table sm-table-ref" id="sm-splits"></table></div>
+    </section>
+  </main>
+
+  <script src="/static/soundmap.data.js"></script>
+  <script src="/static/soundmap.js"></script>
+</body>
+</html>

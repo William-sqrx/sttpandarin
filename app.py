@@ -868,3 +868,6 @@ app.include_router(fish_anims.router)
 import imagegen  # noqa: E402
 app.include_router(imagegen.router)
 
+import soundmap  # noqa: E402
+app.include_router(soundmap.router)
+
